@@ -1,0 +1,2 @@
+torch torchvision numpy pillow opencv-python tqdm matplotlib
+scikit-image

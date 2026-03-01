@@ -1,0 +1,33 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+
+# ---- Virtual env ----
+.venv/
+venv/
+ENV/
+
+# ---- OS / editor ----
+.DS_Store
+.vscode/
+.idea/
+
+# ---- Data (DO NOT COMMIT) ----
+data/cubicasa5k/
+data/processed_npz/
+data/processed_npz_clean/
+*.npz
+
+# ---- Outputs / artifacts (DO NOT COMMIT) ----
+outputs/
+*.pt
+*.pth
+*.ckpt
+*.csv
+*.png
