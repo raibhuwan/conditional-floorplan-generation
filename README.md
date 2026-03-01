@@ -1,3 +1,6 @@
+![Python](https://img.shields.io/badge/python-3.9-blue)
+![PyTorch](https://img.shields.io/badge/PyTorch-DeepLearning-red)
+
 # Conditional Floor Plan Generation (CubiCasa5K)
 
 This repository contains the implementation for an MSc Data Science
