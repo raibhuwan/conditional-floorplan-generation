@@ -30,4 +30,3 @@ outputs/
 *.pth
 *.ckpt
 *.csv
-*.png
