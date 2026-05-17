@@ -1,3 +1,4 @@
+import argparse
 import os
 import glob
 import numpy as np
@@ -203,9 +204,18 @@ def preprocess(data_root, out_dir, category=None, max_samples=50):
 
 
 if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(description="Preprocess CubiCasa5K SVG floor plans into NPZ semantic masks.")
+    parser.add_argument("--data_root", type=str, default="data/cubicasa5k")
+    parser.add_argument("--out_dir", type=str, default="data/processed_npz")
+    parser.add_argument("--category", type=str, default="high_quality_architectural")
+    parser.add_argument("--max_samples", type=int, default=2000)
+
+    args = parser.parse_args()
+
     preprocess(
-        data_root="data/cubicasa5k",
-        out_dir="data/processed_npz",
-        category="high_quality_architectural",
-        max_samples=500
+        data_root=args.data_root,
+        out_dir=args.out_dir,
+        category=args.category,
+        max_samples=args.max_samples,
     )

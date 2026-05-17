@@ -14,6 +14,67 @@ refinement.
 
 ------------------------------------------------------------------------
 
+## Research Context
+
+This repository supports an MSc Data Science dissertation focused on conditional semantic floor plan generation using lightweight deep learning and refinement strategies under constrained hardware environments.
+
+------------------------------------------------------------------------
+
+## System Overview
+
+The project framework combines conditional semantic segmentation, adversarial learning, and lightweight refinement for structured floor plan generation.
+
+![System Overview](docs/images/system_overview.png)
+
+------------------------------------------------------------------------
+
+## Key Features
+
+- SVG-based CubiCasa5K preprocessing pipeline
+- Conditional U-Net semantic layout generation
+- Conditional GAN (cGAN)-based adversarial refinement
+- Lightweight morphology-based post-processing
+- Spatial evaluation using semantic and geometric metrics
+- Qualitative comparison visualisation framework
+- Training and evaluation on Apple M1 hardware using PyTorch MPS
+
+------------------------------------------------------------------------
+
+## Repository Structure
+
+```text
+conditional-floorplan-generation/
+│
+├── data/
+│   ├── cubicasa5k/
+│   ├── processed_npz/
+│   └── processed_npz_clean/
+│
+├── outputs/
+│   ├── checkpoints/
+│   ├── comparison_samples/
+│   └── metrics/
+│
+├── scripts/
+│   ├── evaluate_metrics.py
+│   ├── evaluate_cgan.py
+│   ├── visualize_comparison.py
+│   ├── refine_morphology.py
+│   └── refine_hillclimb.py
+│
+├── src/
+│   ├── preprocess/
+│   ├── models/
+│   ├── training/
+│   └── evaluation/
+│
+├── train_unet.py
+├── train_cgan.py
+├── README.md
+└── EXPERIMENTS.md
+```
+------------------------------------------------------------------------
+
 ## Dataset
 
 This project uses the **CubiCasa5K** dataset:
@@ -21,8 +82,9 @@ This project uses the **CubiCasa5K** dataset:
 *CubiCasa5K: A Dataset and an Improved Multi-Task Model for Floorplan
 Image Analysis*
 
-Download links: - Zenodo: https://zenodo.org/record/2613548 - GitHub:
-https://github.com/CubiCasa/CubiCasa5k
+Download links: 
+- Zenodo: https://zenodo.org/record/2613548 
+- GitHub: https://github.com/CubiCasa/CubiCasa5k
 
 After downloading, place the dataset in:
 
@@ -74,7 +136,7 @@ Optional:
 
 ```bash
 python -m src.preprocess.preprocess_cubicasa --data_root data/cubicasa5k
---out_dir data/processed_npz --max_samples 500
+--out_dir data/processed_npz --max_samples 2000
 ```
 ------------------------------------------------------------------------
 
@@ -130,7 +192,49 @@ outputs/metrics_baseline.csv
 
 ------------------------------------------------------------------------
 
-## Step 7: Refinement
+## Step 7: Train Conditional GAN (cGAN)
+
+```bash
+python train_cgan.py
+```
+
+Output:
+
+outputs/checkpoints/cgan_unet_patchgan_best.pt
+
+------------------------------------------------------------------------
+
+## Step 8: Evaluate cGAN Metrics
+
+```bash
+python -m scripts.evaluate_cgan
+```
+
+Output:
+
+outputs/metrics_cgan.csv
+
+------------------------------------------------------------------------
+
+## Step 9: Generate Qualitative Comparisons
+
+```bash
+python -m scripts.visualize_comparison
+```
+
+Output:
+
+outputs/comparison_samples/
+
+Each comparison image contains:
+- input outline mask,
+- ground-truth semantic layout,
+- U-Net baseline prediction,
+- cGAN prediction.
+
+------------------------------------------------------------------------
+
+## Step 10: Refinement
 
 ### Morphological Refinement (Adopted)
 
@@ -148,16 +252,72 @@ outputs/metrics_refined_morph.csv
 python -m scripts.refine_hillclimb
 ```
 
+### Spatial Evaluation Metrics
+
+The framework evaluates generated layouts using both semantic and geometric metrics:
+
+* Mean Intersection over Union (mIoU)
+* Adjacency similarity (F1)
+* Geometric compactness
+
+These metrics are used to assess:
+
+* semantic prediction accuracy,
+* relational room structure,
+* and geometric layout quality.
+------------------------------------------------------------------------
+
+## Current Experimental Results
+
+| Model | mIoU | Adjacency F1 | Compactness |
+|---|---:|---:|---:|
+| U-Net Baseline | 0.321 | 0.179 | 0.469 |
+| U-Net + Morphology | 0.327 | 0.183 | 0.611 |
+| U-Net + Hill-Climb | 0.256 | 0.181 | 0.528 |
+| cGAN | 0.546 | 0.238 | 0.547 |
+| cGAN + Morphology | 0.567 | 0.250 | 0.660 |
+| cGAN + Hill-Climb | 0.443 | 0.228 | 0.565 |
+
+Results obtained on a filtered subset of 1966 floor plans derived from the CubiCasa5K dataset.
+
+## Qualitative Comparison
+
+Example comparison between:
+- input outline mask,
+- ground-truth layout,
+- U-Net prediction,
+- and cGAN prediction.
+
+![Comparison](docs/images/comparison_example.png)
+
+For detailed experiment logs, training observations, and refinement analysis, see:
+
+`EXPERIMENTS.md`
+
 ------------------------------------------------------------------------
 
 ## Current Status
 
--   SVG preprocessing implemented
--   Dataset filtering implemented
--   Conditional UNet baseline trained
--   Spatial evaluation metrics implemented
--   Morphological refinement implemented
--   Conditional GAN extension (planned)
+- SVG preprocessing implemented
+- Dataset filtering implemented
+- Conditional U-Net baseline implemented
+- Conditional GAN (cGAN) implemented
+- Spatial evaluation metrics implemented
+- Morphological refinement implemented
+- Hill-climbing refinement implemented
+- Comparative evaluation completed
+- Qualitative comparison generation implemented
+
+------------------------------------------------------------------------
+
+## Future Work
+
+Planned future improvements include:
+- larger-scale CubiCasa5K training,
+- improved conditioning mechanisms,
+- graph-based spatial reasoning,
+- diffusion-based generation approaches,
+- and stronger architectural constraint modelling.
 
 ------------------------------------------------------------------------
 

@@ -8,7 +8,7 @@ from src.data.dataset import FloorplanNPZDataset
 from src.models.unet import UNet
 
 DATA_DIR = "data/processed_npz_clean"
-CKPT_PATH = "outputs/checkpoints/unet_base16_best.pt"  # change if your name differs
+CKPT_PATH = "outputs/checkpoints/cgan_unet_patchgan_best.pt"
 
 MAX_COUNT = 18
 NUM_CLASSES = 9
@@ -17,7 +17,7 @@ NUM_CLASSES = 9
 BG = 0
 WALL = 8
 
-OUT_CSV = "outputs/metrics_baseline.csv"
+OUT_CSV = "outputs/metrics_cgan.csv"
 os.makedirs("outputs", exist_ok=True)
 
 
@@ -156,8 +156,15 @@ def f1_edges(pred_edges, gt_edges):
 def load_model(device):
     model = UNet(in_channels=2, out_channels=NUM_CLASSES, base=16).to(device)
     ckpt = torch.load(CKPT_PATH, map_location=device)
-    model.load_state_dict(ckpt["model_state"])
+
+    if "generator_state" in ckpt:
+        model.load_state_dict(ckpt["generator_state"])
+    else:
+        model.load_state_dict(ckpt["model_state"])
+
     model.eval()
+    print("Loaded checkpoint epoch:", ckpt.get("epoch", "unknown"))
+    print("Checkpoint val IoU:", ckpt.get("val_iou", "unknown"))
     return model
 
 

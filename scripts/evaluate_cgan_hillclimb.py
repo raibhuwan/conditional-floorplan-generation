@@ -6,9 +6,10 @@ from torch.utils.data import DataLoader
 
 from src.data.dataset import FloorplanNPZDataset
 from src.models.unet import UNet
+from src.refinement.hillclimb import refine_semantic_mask_hillclimb
 
 DATA_DIR = "data/processed_npz_clean"
-CKPT_PATH = "outputs/checkpoints/unet_base16_best.pt"  # change if your name differs
+CKPT_PATH = "outputs/checkpoints/cgan_unet_patchgan_best.pt"
 
 MAX_COUNT = 18
 NUM_CLASSES = 9
@@ -17,7 +18,7 @@ NUM_CLASSES = 9
 BG = 0
 WALL = 8
 
-OUT_CSV = "outputs/metrics_baseline.csv"
+OUT_CSV = "outputs/metrics_cgan_hillclimb.csv"
 os.makedirs("outputs", exist_ok=True)
 
 
@@ -156,8 +157,15 @@ def f1_edges(pred_edges, gt_edges):
 def load_model(device):
     model = UNet(in_channels=2, out_channels=NUM_CLASSES, base=16).to(device)
     ckpt = torch.load(CKPT_PATH, map_location=device)
-    model.load_state_dict(ckpt["model_state"])
+
+    if "generator_state" in ckpt:
+        model.load_state_dict(ckpt["generator_state"])
+    else:
+        model.load_state_dict(ckpt["model_state"])
+
     model.eval()
+    print("Loaded checkpoint epoch:", ckpt.get("epoch", "unknown"))
+    print("Checkpoint val IoU:", ckpt.get("val_iou", "unknown"))
     return model
 
 
@@ -182,11 +190,20 @@ def main():
         pred_np = pred[0].cpu().numpy().astype(np.uint8)
         gt_np = y[0].cpu().numpy().astype(np.uint8)
 
+        # Apply morphology refinement to cGAN prediction
+        pred_refined = refine_semantic_mask_hillclimb(
+            pred_np,
+            num_classes=NUM_CLASSES,
+            ignore_classes=(BG,),
+            kernel_size=3,
+            iterations=3,
+        )
+
         # Metrics
-        miou = mean_iou(pred_np, gt_np, ignore=(BG,))  # ignore background by default
+        miou = mean_iou(pred_refined, gt_np, ignore=(BG,))  # ignore background by default
 
         gt_inst = extract_instances(gt_np)
-        pr_inst = extract_instances(pred_np)
+        pr_inst = extract_instances(pred_refined)
 
         # adjacency similarity between class-level edges
         gt_edges = adjacency_edges(gt_inst)
