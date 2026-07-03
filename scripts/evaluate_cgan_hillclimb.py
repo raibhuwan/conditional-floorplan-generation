@@ -1,25 +1,40 @@
-import os, glob, csv
+import os, csv, argparse
 import numpy as np
 import torch
 import cv2
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from src.data.dataset import FloorplanNPZDataset
+from src.data.splits import load_split
 from src.models.unet import UNet
 from src.refinement.hillclimb import refine_semantic_mask_hillclimb
 
-DATA_DIR = "data/processed_npz_clean"
+DATA_DIR = "data/processed_npz_clean_full"
+SPLIT_PATH = "outputs/splits/split_seed42_full.json"
 CKPT_PATH = "outputs/checkpoints/cgan_unet_patchgan_best.pt"
 
-MAX_COUNT = 18
+MAX_COUNT = 32
 NUM_CLASSES = 9
+
+OUT_CSV = "outputs/metrics_cgan_hillclimb.csv"
+os.makedirs("outputs", exist_ok=True)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate cGAN with hill-climbing refinement on the held-out test set.")
+    parser.add_argument("--data_dir", type=str, default=DATA_DIR)
+    parser.add_argument("--split_path", type=str, default=SPLIT_PATH)
+    parser.add_argument("--ckpt_path", type=str, default=CKPT_PATH)
+    parser.add_argument("--max_count", type=int, default=MAX_COUNT)
+    parser.add_argument("--out_csv", type=str, default=OUT_CSV)
+    parser.add_argument("--kernel_size", type=int, default=3)
+    parser.add_argument("--iterations", type=int, default=3)
+    return parser.parse_args()
+
 
 # merged ids (from your merge_map)
 BG = 0
 WALL = 8
-
-OUT_CSV = "outputs/metrics_cgan_hillclimb.csv"
-os.makedirs("outputs", exist_ok=True)
 
 
 def get_device():
@@ -154,9 +169,42 @@ def f1_edges(pred_edges, gt_edges):
     return float(2 * prec * rec / (prec + rec))
 
 
-def load_model(device):
+def boundary_violation_rate(pred_mask, outline_mask):
+    """
+    Measure the proportion of predicted non-background pixels that fall outside
+    the building outline. Lower values indicate better boundary consistency.
+    """
+    pred_non_bg = pred_mask != BG
+    total_pred = int(pred_non_bg.sum())
+
+    if total_pred == 0:
+        return 0.0
+
+    outside = np.logical_and(pred_non_bg, outline_mask == 0).sum()
+    return float(outside / total_pred)
+
+
+def get_expected_room_count_from_input(x, max_count):
+    """
+    Recover the expected room count from the second input channel.
+    Channel 0 contains the outline and channel 1 contains the normalised room count.
+    """
+    count_channel = x[0, 1].detach().cpu().numpy()
+    normalised_count = float(count_channel.max())
+    return int(round(normalised_count * max_count))
+
+
+def room_count_error(expected_count, predicted_instances):
+    """
+    Calculate absolute room-count error for one prediction. Lower values are better.
+    """
+    predicted_count = len(predicted_instances)
+    return abs(expected_count - predicted_count), predicted_count
+
+
+def load_model(device, ckpt_path):
     model = UNet(in_channels=2, out_channels=NUM_CLASSES, base=16).to(device)
-    ckpt = torch.load(CKPT_PATH, map_location=device)
+    ckpt = torch.load(ckpt_path, map_location=device)
 
     if "generator_state" in ckpt:
         model.load_state_dict(ckpt["generator_state"])
@@ -170,13 +218,26 @@ def load_model(device):
 
 
 def main():
+    args = parse_args()
+
     device = get_device()
     print("Device:", device)
 
-    ds = FloorplanNPZDataset(DATA_DIR, max_count=MAX_COUNT)
-    loader = DataLoader(ds, batch_size=1, shuffle=False, num_workers=0)
+    ds = FloorplanNPZDataset(args.data_dir, max_count=args.max_count)
+    split = load_split(args.split_path)
+    test_ds = Subset(ds, split["test"])
+    loader = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=0)
 
-    model = load_model(device)
+    print(f"Data folder: {args.data_dir}")
+    print(f"Split file: {args.split_path}")
+    print(f"Checkpoint: {args.ckpt_path}")
+    print(f"MAX_COUNT: {args.max_count}")
+    print(f"Output CSV: {args.out_csv}")
+    print(f"Hill-climbing kernel size: {args.kernel_size}")
+    print(f"Hill-climbing iterations: {args.iterations}")
+    print(f"Evaluating cGAN + hill-climbing on held-out test samples: {len(test_ds)}")
+
+    model = load_model(device, args.ckpt_path)
 
     rows = []
     for idx, (x, y) in enumerate(loader):
@@ -190,13 +251,16 @@ def main():
         pred_np = pred[0].cpu().numpy().astype(np.uint8)
         gt_np = y[0].cpu().numpy().astype(np.uint8)
 
-        # Apply morphology refinement to cGAN prediction
+        outline_np = (x[0, 0].detach().cpu().numpy() > 0.5).astype(np.uint8)
+        expected_room_count = get_expected_room_count_from_input(x, max_count=args.max_count)
+
+        # Apply hill-climbing refinement to cGAN prediction
         pred_refined = refine_semantic_mask_hillclimb(
             pred_np,
             num_classes=NUM_CLASSES,
             ignore_classes=(BG,),
-            kernel_size=3,
-            iterations=3,
+            kernel_size=args.kernel_size,
+            iterations=args.iterations,
         )
 
         # Metrics
@@ -204,6 +268,9 @@ def main():
 
         gt_inst = extract_instances(gt_np)
         pr_inst = extract_instances(pred_refined)
+
+        bvr = boundary_violation_rate(pred_refined, outline_np)
+        rc_error, predicted_room_count = room_count_error(expected_room_count, pr_inst)
 
         # adjacency similarity between class-level edges
         gt_edges = adjacency_edges(gt_inst)
@@ -224,13 +291,18 @@ def main():
             "compact_pred": pr_comp_mean,
             "num_inst_gt": len(gt_inst),
             "num_inst_pred": len(pr_inst),
+            "boundary_violation_rate": bvr,
+            "expected_room_count": expected_room_count,
+            "predicted_room_count": predicted_room_count,
+            "room_count_error": rc_error,
         })
 
         if (idx + 1) % 50 == 0:
-            print(f"[{idx+1}/{len(ds)}] mIoU={miou:.3f} adjF1={adj_f1:.3f} comp_pred={pr_comp_mean:.3f}")
+            print(f"[{idx+1}/{len(test_ds)}] mIoU={miou:.3f} adjF1={adj_f1:.3f} comp_pred={pr_comp_mean:.3f} BVR={bvr:.3f} RCerr={rc_error}")
 
     # Save CSV
-    with open(OUT_CSV, "w", newline="") as f:
+    os.makedirs(os.path.dirname(args.out_csv) or ".", exist_ok=True)
+    with open(args.out_csv, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
@@ -239,12 +311,16 @@ def main():
     miou_mean = float(np.mean([r["miou_no_bg"] for r in rows]))
     adj_mean = float(np.mean([r["adj_f1"] for r in rows]))
     comp_mean = float(np.mean([r["compact_pred"] for r in rows]))
+    bvr_mean = float(np.mean([r["boundary_violation_rate"] for r in rows]))
+    room_count_mae = float(np.mean([r["room_count_error"] for r in rows]))
 
-    print("\nSaved:", OUT_CSV)
+    print("\nSaved:", args.out_csv)
     print(f"Summary over {len(rows)} samples:")
     print(f" mean mIoU (no bg): {miou_mean:.3f}")
     print(f" mean adjacency F1: {adj_mean:.3f}")
     print(f" mean compactness (pred): {comp_mean:.3f}")
+    print(f" mean boundary violation rate: {bvr_mean:.3f}")
+    print(f" mean room-count MAE: {room_count_mae:.3f}")
 
 
 if __name__ == "__main__":

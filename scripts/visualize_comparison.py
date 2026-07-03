@@ -8,7 +8,7 @@ from src.data.dataset import FloorplanNPZDataset
 from src.models.unet import UNet
 
 
-DATA_DIR = "data/processed_npz_clean"
+DATA_DIR = "data/processed_npz_clean_full"
 
 BASELINE_CKPT = "outputs/checkpoints/unet_base16_best.pt"
 CGAN_CKPT = "outputs/checkpoints/cgan_unet_patchgan_best.pt"
@@ -16,7 +16,7 @@ CGAN_CKPT = "outputs/checkpoints/cgan_unet_patchgan_best.pt"
 OUT_DIR = "outputs/comparison_samples"
 os.makedirs(OUT_DIR, exist_ok=True)
 
-MAX_COUNT = 18
+MAX_COUNT = 32
 NUM_CLASSES = 9
 NUM_SAVE = 20
 
