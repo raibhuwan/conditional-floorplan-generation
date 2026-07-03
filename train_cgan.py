@@ -1,3 +1,4 @@
+import argparse
 import os
 import random
 import time
@@ -8,6 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from src.data.dataset import FloorplanNPZDataset
+from src.data.splits import load_split
 from src.models.unet import UNet
 from src.models.patchgan import PatchDiscriminator
 
@@ -15,34 +17,40 @@ from src.models.patchgan import PatchDiscriminator
 # -----------------------------
 # Config
 # -----------------------------
-DATA_DIR = "data/processed_npz_clean"
+DEFAULT_DATA_DIR = "data/processed_npz_clean_full"
+DEFAULT_SPLIT_PATH = "outputs/splits/split_seed42_full.json"
 OUT_CKPT = "outputs/checkpoints"
 os.makedirs(OUT_CKPT, exist_ok=True)
 
-# MAX_COUNT = 17 #1000
-MAX_COUNT = 18
+DEFAULT_MAX_COUNT = 32
 NUM_CLASSES = 9
 
-BATCH_SIZE = 4
-EPOCHS = 30
-LR_G = 1e-4
+DEFAULT_BATCH_SIZE = 4
+DEFAULT_EPOCHS = 30
+DEFAULT_LR_G = 1e-4
 
-SEED = 42
+DEFAULT_SEED = 42
 
-#500
-# LR_D = 1e-4
-# LAMBDA_CE = 10.0
-# LAMBDA_GAN = 1.0
+# Default cGAN configuration used for the full high_quality_architectural run.
+DEFAULT_LR_D = 1e-5
+DEFAULT_LAMBDA_CE = 30.0
+DEFAULT_LAMBDA_GAN = 0.05
 
-#1000
-# LR_D = 5e-5
-# LAMBDA_CE = 20.0
-# LAMBDA_GAN = 0.1
 
-#2000
-LR_D = 1e-5
-LAMBDA_CE = 30.0
-LAMBDA_GAN = 0.05
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train the Pix2Pix-style cGAN for semantic floor plan generation.")
+    parser.add_argument("--data_dir", type=str, default=DEFAULT_DATA_DIR, help="Folder containing clean processed NPZ files.")
+    parser.add_argument("--split_path", type=str, default=DEFAULT_SPLIT_PATH, help="Path to the fixed train/val/test split JSON file.")
+    parser.add_argument("--max_count", type=int, default=DEFAULT_MAX_COUNT, help="Maximum room count used to normalise the room-count condition channel.")
+    parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Training batch size.")
+    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS, help="Number of training epochs.")
+    parser.add_argument("--lr_g", type=float, default=DEFAULT_LR_G, help="Generator learning rate.")
+    parser.add_argument("--lr_d", type=float, default=DEFAULT_LR_D, help="Discriminator learning rate.")
+    parser.add_argument("--lambda_ce", type=float, default=DEFAULT_LAMBDA_CE, help="Weight for the generator cross-entropy loss.")
+    parser.add_argument("--lambda_gan", type=float, default=DEFAULT_LAMBDA_GAN, help="Weight for the generator adversarial loss.")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed for reproducibility.")
+    parser.add_argument("--checkpoint_name", type=str, default="cgan_unet_patchgan_best.pt", help="Filename for the best checkpoint saved in outputs/checkpoints.")
+    return parser.parse_args()
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -86,39 +94,45 @@ def mean_iou(pred, target, num_classes=NUM_CLASSES, ignore_index=0):
 
 
 def main():
-    set_seed(SEED)
+    args = parse_args()
+    set_seed(args.seed)
     device = get_device()
     print("Device:", device)
 
-    dataset = FloorplanNPZDataset(DATA_DIR, max_count=MAX_COUNT)
+    dataset = FloorplanNPZDataset(args.data_dir, max_count=args.max_count)
 
-    # train/val split
+    # fixed train/validation/test split
     n = len(dataset)
-    idxs = list(range(n))
-    random.shuffle(idxs)
+    split = load_split(args.split_path)
 
-    val_size = max(1, int(0.2 * n))
-    val_idxs = idxs[:val_size]
-    train_idxs = idxs[val_size:]
-
-    train_ds = Subset(dataset, train_idxs)
-    val_ds = Subset(dataset, val_idxs)
+    train_ds = Subset(dataset, split["train"])
+    val_ds = Subset(dataset, split["val"])
+    test_count = len(split["test"])
 
     train_loader = DataLoader(
         train_ds,
-        batch_size=BATCH_SIZE,
+        batch_size=args.batch_size,
         shuffle=True,
         num_workers=0
     )
 
     val_loader = DataLoader(
         val_ds,
-        batch_size=BATCH_SIZE,
+        batch_size=args.batch_size,
         shuffle=False,
         num_workers=0
     )
 
-    print(f"Samples: total={n}, train={len(train_ds)}, val={len(val_ds)}")
+    print(f"Data folder: {args.data_dir}")
+    print(f"Split file: {args.split_path}")
+    print(f"MAX_COUNT: {args.max_count}")
+    print(f"Batch size: {args.batch_size}")
+    print(f"Epochs: {args.epochs}")
+    print(f"LR_G: {args.lr_g}")
+    print(f"LR_D: {args.lr_d}")
+    print(f"LAMBDA_CE: {args.lambda_ce}")
+    print(f"LAMBDA_GAN: {args.lambda_gan}")
+    print(f"Samples: total={n}, train={len(train_ds)}, val={len(val_ds)}, test={test_count}")
 
     # Generator = your U-Net
     generator = UNet(
@@ -134,15 +148,15 @@ def main():
         base=32
     ).to(device)
 
-    opt_g = torch.optim.Adam(generator.parameters(), lr=LR_G, betas=(0.5, 0.999))
-    opt_d = torch.optim.Adam(discriminator.parameters(), lr=LR_D, betas=(0.5, 0.999))
+    opt_g = torch.optim.Adam(generator.parameters(), lr=args.lr_g, betas=(0.5, 0.999))
+    opt_d = torch.optim.Adam(discriminator.parameters(), lr=args.lr_d, betas=(0.5, 0.999))
 
     ce_loss = nn.CrossEntropyLoss()
     adv_loss = nn.BCEWithLogitsLoss()
 
     best_val_iou = -1.0
 
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in range(1, args.epochs + 1):
         t0 = time.time()
 
         generator.train()
@@ -194,7 +208,7 @@ def main():
             g_adv = adv_loss(d_fake_for_g, torch.ones_like(d_fake_for_g))
             g_ce = ce_loss(fake_logits, y)
 
-            g_loss = (LAMBDA_CE * g_ce) + (LAMBDA_GAN * g_adv)
+            g_loss = (args.lambda_ce * g_ce) + (args.lambda_gan * g_adv)
 
             opt_g.zero_grad()
             g_loss.backward()
@@ -263,13 +277,20 @@ def main():
                     "discriminator_state": discriminator.state_dict(),
                     "val_iou": best_val_iou,
                     "config": {
-                        "max_count": MAX_COUNT,
+                        "data_dir": args.data_dir,
+                        "split_path": args.split_path,
+                        "max_count": args.max_count,
                         "num_classes": NUM_CLASSES,
-                        "lambda_ce": LAMBDA_CE,
-                        "lambda_gan": LAMBDA_GAN,
+                        "batch_size": args.batch_size,
+                        "epochs": args.epochs,
+                        "lr_g": args.lr_g,
+                        "lr_d": args.lr_d,
+                        "lambda_ce": args.lambda_ce,
+                        "lambda_gan": args.lambda_gan,
+                        "seed": args.seed,
                     },
                 },
-                os.path.join(OUT_CKPT, "cgan_unet_patchgan_best.pt")
+                os.path.join(OUT_CKPT, args.checkpoint_name)
             )
 
             print(f"Saved best cGAN checkpoint with val IoU={best_val_iou:.3f}")

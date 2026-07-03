@@ -1,22 +1,49 @@
+import argparse
 import glob
+import os
+
 import numpy as np
 
-NPZ_DIR = "data/processed_npz"
 
-files = sorted(glob.glob(f"{NPZ_DIR}/*.npz"))
-print("Found", len(files), "npz files")
-print("First file:", files[0])
+def main():
+    parser = argparse.ArgumentParser(description="Inspect generated CubiCasa5K NPZ files.")
+    parser.add_argument(
+        "--data_dir",
+        type=str,
+        default="data/processed_npz",
+        help="Folder containing processed NPZ files.",
+    )
+    args = parser.parse_args()
 
-d = np.load(files[0], allow_pickle=True)
+    files = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
+    print("Found", len(files), "npz files")
 
-print("\nKeys inside npz:", d.files)
-print("sample_id:", d["sample_id"])
-print("room_count:", int(d["room_count"]))
+    if not files:
+        print("No NPZ files found in", args.data_dir)
+        return
 
-print("\nShapes / dtypes")
-print("sem:", d["sem"].shape, d["sem"].dtype)           # (256,256) class ids
-print("outline:", d["outline"].shape, d["outline"].dtype)  # (256,256) 0/1
+    print("First file:", files[0])
 
-# Show what label ids exist in this sample
-unique = np.unique(d["sem"])
-print("\nUnique class ids in sem:", unique)
+    d = np.load(files[0], allow_pickle=True)
+
+    print("\nKeys inside npz:", d.files)
+
+    if "sample_id" in d.files:
+        print("sample_id:", d["sample_id"])
+
+    if "room_count" in d.files:
+        print("room_count:", int(d["room_count"]))
+
+    print("\nShapes / dtypes")
+    if "sem" in d.files:
+        print("sem:", d["sem"].shape, d["sem"].dtype)
+    if "outline" in d.files:
+        print("outline:", d["outline"].shape, d["outline"].dtype)
+
+    if "sem" in d.files:
+        unique = np.unique(d["sem"])
+        print("\nUnique class ids in sem:", unique)
+
+
+if __name__ == "__main__":
+    main()

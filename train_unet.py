@@ -1,3 +1,4 @@
+import argparse
 import os
 import random
 import numpy as np
@@ -8,22 +9,36 @@ from torch.utils.data import DataLoader, Subset
 import cv2
 
 from src.data.dataset import FloorplanNPZDataset
+from src.data.splits import load_split
 from src.models.unet import UNet
 import time
 
-DATA_DIR = "data/processed_npz_clean"
-MAX_COUNT = 17
+DEFAULT_DATA_DIR = "data/processed_npz_clean_full"
+DEFAULT_SPLIT_PATH = "outputs/splits/split_seed42_full.json"
+DEFAULT_MAX_COUNT = 32
 NUM_CLASSES = 9
 
-BATCH_SIZE = 4
-EPOCHS = 30
-LR = 1e-3
-SEED = 42
+DEFAULT_BATCH_SIZE = 4
+DEFAULT_EPOCHS = 30
+DEFAULT_LR = 1e-3
+DEFAULT_SEED = 42
 
 OUT_SAMPLES = "outputs/train_samples"
 OUT_CKPT = "outputs/checkpoints"
 os.makedirs(OUT_SAMPLES, exist_ok=True)
 os.makedirs(OUT_CKPT, exist_ok=True)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train the U-Net baseline for semantic floor plan generation.")
+    parser.add_argument("--data_dir", type=str, default=DEFAULT_DATA_DIR, help="Folder containing clean processed NPZ files.")
+    parser.add_argument("--split_path", type=str, default=DEFAULT_SPLIT_PATH, help="Path to the fixed train/val/test split JSON file.")
+    parser.add_argument("--max_count", type=int, default=DEFAULT_MAX_COUNT, help="Maximum room count used to normalise the room-count condition channel.")
+    parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Training batch size.")
+    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS, help="Number of training epochs.")
+    parser.add_argument("--lr", type=float, default=DEFAULT_LR, help="Learning rate.")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed for reproducibility.")
+    parser.add_argument("--checkpoint_name", type=str, default="unet_base16_best.pt", help="Filename for the best checkpoint saved in outputs/checkpoints.")
+    return parser.parse_args()
 
 
 def set_seed(seed=42):
@@ -91,36 +106,36 @@ def save_sample_batch(x, y, pred, epoch, prefix="train"):
 
 
 def main():
-    set_seed(SEED)
+    args = parse_args()
+    set_seed(args.seed)
     device = get_device()
     print("Device:", device)
 
-    ds = FloorplanNPZDataset(DATA_DIR, max_count=MAX_COUNT)
+    ds = FloorplanNPZDataset(args.data_dir, max_count=args.max_count)
 
-    # ---- train/val split ----
+    # ---- fixed train/validation/test split ----
     n = len(ds)
-    idxs = list(range(n))
-    random.shuffle(idxs)
+    split = load_split(args.split_path)
 
-    val_size = max(1, int(0.2 * n))
-    val_idxs = idxs[:val_size]
-    train_idxs = idxs[val_size:]
+    train_ds = Subset(ds, split["train"])
+    val_ds = Subset(ds, split["val"])
+    test_count = len(split["test"])
 
-    train_ds = Subset(ds, train_idxs)
-    val_ds = Subset(ds, val_idxs)
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
-
-    print(f"Samples: total={n}, train={len(train_ds)}, val={len(val_ds)}")
+    print(f"Data folder: {args.data_dir}")
+    print(f"Split file: {args.split_path}")
+    print(f"MAX_COUNT: {args.max_count}")
+    print(f"Samples: total={n}, train={len(train_ds)}, val={len(val_ds)}, test={test_count}")
 
     model = UNet(in_channels=2, out_channels=NUM_CLASSES, base=16).to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=LR)
+    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
 
     best_val = -1.0
 
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in range(1, args.epochs + 1):
 
         t0 = time.time()
 
@@ -186,7 +201,7 @@ def main():
         # Save best checkpoint
         if val_iou > best_val:
             best_val = val_iou
-            ckpt_path = os.path.join(OUT_CKPT, "unet_base16_best.pt")
+            ckpt_path = os.path.join(OUT_CKPT, args.checkpoint_name)
             torch.save(
                 {"epoch": epoch, "model_state": model.state_dict(), "val_iou": best_val},
                 ckpt_path
