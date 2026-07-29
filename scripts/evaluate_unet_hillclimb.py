@@ -1,7 +1,10 @@
-import os, csv, argparse
+import argparse
+import csv
+import os
+
+import cv2
 import numpy as np
 import torch
-import cv2
 from torch.utils.data import DataLoader, Subset
 
 from src.data.dataset import FloorplanNPZDataset
@@ -9,23 +12,30 @@ from src.data.splits import load_split
 from src.models.unet import UNet
 from src.refinement.hillclimb import refine_semantic_mask_hillclimb
 
+
 DATA_DIR = "data/processed_npz_clean_full"
 SPLIT_PATH = "outputs/splits/split_seed42_full.json"
-CKPT_PATH = "outputs/checkpoints/unet_base16_best.pt"
+CKPT_PATH = "outputs/checkpoints/unet_base16_logged_best.pt"
 
 MAX_COUNT = 32
 NUM_CLASSES = 9
 
-# merged ids from the semantic class mapping
 BG = 0
 WALL = 8
 
-OUT_CSV = "outputs/metrics_unet_hillclimb.csv"
+INSTANCE_MIN_AREA = 30
+OUT_CSV = "outputs/metrics_unet_hillclimb_room_count_fixed.csv"
+
 os.makedirs("outputs", exist_ok=True)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Evaluate U-Net with hill-climbing refinement on the held-out test set.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Evaluate the U-Net with hill-climbing refinement on the held-out "
+            "test set using a consistent combined-component room-count definition."
+        )
+    )
     parser.add_argument("--data_dir", type=str, default=DATA_DIR)
     parser.add_argument("--split_path", type=str, default=SPLIT_PATH)
     parser.add_argument("--ckpt_path", type=str, default=CKPT_PATH)
@@ -43,177 +53,347 @@ def get_device():
 
 
 def mean_iou(pred, gt, num_classes=NUM_CLASSES, ignore=(BG,)):
+    """
+    Calculate sample-level mean IoU across semantic classes while excluding
+    the class IDs listed in ``ignore``.
+    """
     ious = []
-    for c in range(num_classes):
-        if c in ignore:
+
+    for class_id in range(num_classes):
+        if class_id in ignore:
             continue
-        p = (pred == c)
-        g = (gt == c)
-        inter = np.logical_and(p, g).sum()
-        union = np.logical_or(p, g).sum()
+
+        pred_class = pred == class_id
+        gt_class = gt == class_id
+
+        intersection = np.logical_and(
+            pred_class,
+            gt_class,
+        ).sum()
+        union = np.logical_or(
+            pred_class,
+            gt_class,
+        ).sum()
+
         if union == 0:
             continue
-        ious.append(inter / union)
-    return float(np.mean(ious)) if len(ious) else 0.0
+
+        ious.append(intersection / union)
+
+    return float(np.mean(ious)) if ious else 0.0
 
 
-def extract_instances(mask, ignore_ids=(BG, WALL), min_area=30):
+def extract_instances(
+    mask,
+    ignore_ids=(BG, WALL),
+    min_area=INSTANCE_MIN_AREA,
+):
     """
-    Turn a semantic mask into room instances (connected components).
-    Returns:
-      instances: list of dict {class_id, comp_id, area, bbox, binary_mask}
+    Extract class-specific connected components.
+
+    These components are used for adjacency and compactness only. They are
+    not used for room-count error because the requested room count was
+    constructed from one combined non-background, non-wall mask.
     """
     instances = []
-    h, w = mask.shape
 
-    for c in range(NUM_CLASSES):
-        if c in ignore_ids:
-            continue
-        bin_c = (mask == c).astype(np.uint8)
-        if bin_c.sum() < min_area:
+    for class_id in range(NUM_CLASSES):
+        if class_id in ignore_ids:
             continue
 
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(bin_c, connectivity=8)
-        for comp_id in range(1, n):
-            area = int(stats[comp_id, cv2.CC_STAT_AREA])
+        class_mask = (mask == class_id).astype(np.uint8)
+
+        if int(class_mask.sum()) < min_area:
+            continue
+
+        component_count, labels, stats, _ = (
+            cv2.connectedComponentsWithStats(
+                class_mask,
+                connectivity=8,
+            )
+        )
+
+        for component_id in range(1, component_count):
+            area = int(
+                stats[component_id, cv2.CC_STAT_AREA]
+            )
+
             if area < min_area:
                 continue
-            x = int(stats[comp_id, cv2.CC_STAT_LEFT])
-            y = int(stats[comp_id, cv2.CC_STAT_TOP])
-            bw = int(stats[comp_id, cv2.CC_STAT_WIDTH])
-            bh = int(stats[comp_id, cv2.CC_STAT_HEIGHT])
 
-            inst_mask = (labels == comp_id).astype(np.uint8)
+            x = int(
+                stats[component_id, cv2.CC_STAT_LEFT]
+            )
+            y = int(
+                stats[component_id, cv2.CC_STAT_TOP]
+            )
+            width = int(
+                stats[component_id, cv2.CC_STAT_WIDTH]
+            )
+            height = int(
+                stats[component_id, cv2.CC_STAT_HEIGHT]
+            )
 
-            instances.append({
-                "class_id": c,
-                "area": area,
-                "bbox": (x, y, bw, bh),
-                "mask": inst_mask
-            })
+            instance_mask = (
+                labels == component_id
+            ).astype(np.uint8)
+
+            instances.append(
+                {
+                    "class_id": class_id,
+                    "area": area,
+                    "bbox": (x, y, width, height),
+                    "mask": instance_mask,
+                }
+            )
+
     return instances
 
 
-def compactness_of_instance(inst_mask):
+def count_rooms_from_semantic_mask(
+    mask,
+    background_id=BG,
+    wall_id=WALL,
+):
     """
-    Compute 4*pi*A / P^2 for a binary instance mask.
+    Count rooms from one combined binary room-region mask.
+
+    All non-background and non-wall semantic pixels are merged before
+    connected components are calculated. Semantic class boundaries do not
+    create additional rooms. This matches the room-count construction used
+    for the conditioning channel during preprocessing.
     """
-    area = float(inst_mask.sum())
+    room_region_mask = np.logical_and(
+        mask != background_id,
+        mask != wall_id,
+    ).astype(np.uint8)
+
+    if int(room_region_mask.sum()) == 0:
+        return 0
+
+    component_count, _ = cv2.connectedComponents(
+        room_region_mask,
+        connectivity=8,
+    )
+
+    return int(component_count - 1)
+
+
+def compactness_of_instance(instance_mask):
+    """
+    Compute compactness as 4*pi*A/P^2 for one binary instance.
+    """
+    area = float(instance_mask.sum())
+
     if area <= 0:
         return 0.0
 
-    # perimeter from contours
-    contours, _ = cv2.findContours(inst_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(
+        instance_mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+
     if not contours:
         return 0.0
 
-    perim = 0.0
-    for cnt in contours:
-        perim += cv2.arcLength(cnt, True)
+    perimeter = sum(
+        cv2.arcLength(contour, True)
+        for contour in contours
+    )
 
-    if perim <= 1e-6:
+    if perimeter <= 1e-6:
         return 0.0
 
-    return float((4.0 * np.pi * area) / (perim * perim))
+    return float(
+        (4.0 * np.pi * area)
+        / (perimeter * perimeter)
+    )
 
 
 def adjacency_edges(instances):
     """
-    Build adjacency edges between room instances based on boundary touch.
-    Output edges are between class IDs (not instance IDs) to keep it simple.
-    Returns set of tuples like (min_class, max_class).
+    Build class-level adjacency edges from class-specific room instances.
     """
     edges = set()
-    # Precompute dilated masks for touch detection
     kernel = np.ones((3, 3), np.uint8)
 
-    dilated = []
-    for inst in instances:
-        m = inst["mask"].astype(np.uint8)
-        d = cv2.dilate(m, kernel, iterations=1)
-        dilated.append(d)
+    dilated_masks = [
+        cv2.dilate(
+            instance["mask"].astype(np.uint8),
+            kernel,
+            iterations=1,
+        )
+        for instance in instances
+    ]
 
-    for i in range(len(instances)):
-        ci = instances[i]["class_id"]
-        for j in range(i + 1, len(instances)):
-            cj = instances[j]["class_id"]
-            if ci == cj:
-                continue  # adjacency between same class not useful here
+    for first_index in range(len(instances)):
+        first_class = instances[first_index]["class_id"]
 
-            # If dilated boundaries overlap, consider adjacent
-            touch = np.logical_and(dilated[i] > 0, dilated[j] > 0).any()
-            if touch:
-                a, b = (ci, cj) if ci < cj else (cj, ci)
-                edges.add((a, b))
+        for second_index in range(
+            first_index + 1,
+            len(instances),
+        ):
+            second_class = instances[
+                second_index
+            ]["class_id"]
+
+            if first_class == second_class:
+                continue
+
+            touching = np.logical_and(
+                dilated_masks[first_index] > 0,
+                dilated_masks[second_index] > 0,
+            ).any()
+
+            if touching:
+                edges.add(
+                    tuple(
+                        sorted(
+                            (first_class, second_class)
+                        )
+                    )
+                )
+
     return edges
 
 
-def f1_edges(pred_edges, gt_edges):
+def f1_edges(predicted_edges, ground_truth_edges):
     """
-    F1 score on sets of edges.
+    Calculate F1 score between two class-level adjacency-edge sets.
     """
-    if len(pred_edges) == 0 and len(gt_edges) == 0:
+    if not predicted_edges and not ground_truth_edges:
         return 1.0
-    if len(pred_edges) == 0 or len(gt_edges) == 0:
+
+    if not predicted_edges or not ground_truth_edges:
         return 0.0
 
-    tp = len(pred_edges.intersection(gt_edges))
-    fp = len(pred_edges - gt_edges)
-    fn = len(gt_edges - pred_edges)
+    true_positives = len(
+        predicted_edges.intersection(
+            ground_truth_edges
+        )
+    )
+    false_positives = len(
+        predicted_edges - ground_truth_edges
+    )
+    false_negatives = len(
+        ground_truth_edges - predicted_edges
+    )
 
-    prec = tp / (tp + fp) if (tp + fp) else 0.0
-    rec = tp / (tp + fn) if (tp + fn) else 0.0
-    if (prec + rec) == 0:
+    precision_denominator = (
+        true_positives + false_positives
+    )
+    recall_denominator = (
+        true_positives + false_negatives
+    )
+
+    precision = (
+        true_positives / precision_denominator
+        if precision_denominator
+        else 0.0
+    )
+    recall = (
+        true_positives / recall_denominator
+        if recall_denominator
+        else 0.0
+    )
+
+    if precision + recall == 0:
         return 0.0
-    return float(2 * prec * rec / (prec + rec))
+
+    return float(
+        2 * precision * recall
+        / (precision + recall)
+    )
 
 
-def boundary_violation_rate(pred_mask, outline_mask):
+def boundary_violation_rate(
+    pred_mask,
+    support_mask,
+):
     """
-    Measure the proportion of predicted non-background pixels that fall outside
-    the building outline. Lower values indicate better boundary consistency.
+    Measure the proportion of predicted non-background pixels outside the
+    binary floor-plan support mask.
     """
-    pred_non_bg = pred_mask != BG
-    total_pred = int(pred_non_bg.sum())
+    predicted_non_background = pred_mask != BG
+    total_predicted_pixels = int(
+        predicted_non_background.sum()
+    )
 
-    if total_pred == 0:
+    if total_predicted_pixels == 0:
         return 0.0
 
-    outside = np.logical_and(pred_non_bg, outline_mask == 0).sum()
-    return float(outside / total_pred)
+    outside_pixels = np.logical_and(
+        predicted_non_background,
+        support_mask == 0,
+    ).sum()
+
+    return float(
+        outside_pixels / total_predicted_pixels
+    )
 
 
-def get_expected_room_count_from_input(x, max_count):
+def get_expected_room_count_from_input(
+    inputs,
+    max_count,
+):
     """
-    Recover the expected room count from the second input channel.
-    Channel 0 contains the outline and channel 1 contains the normalised room count.
+    Recover the requested room count from the normalised count channel.
     """
-    count_channel = x[0, 1].detach().cpu().numpy()
-    normalised_count = float(count_channel.max())
-    return int(round(normalised_count * max_count))
+    count_channel = (
+        inputs[0, 1]
+        .detach()
+        .cpu()
+        .numpy()
+    )
+    normalised_count = float(
+        count_channel.max()
+    )
+
+    return int(
+        round(normalised_count * max_count)
+    )
 
 
-def room_count_error(expected_count, predicted_instances):
+def room_count_error(
+    expected_count,
+    predicted_count,
+):
     """
-    Calculate absolute room-count error for one prediction. Lower values are better.
+    Calculate absolute room-count error for one floor plan.
     """
-    predicted_count = len(predicted_instances)
-    return abs(expected_count - predicted_count), predicted_count
+    return abs(
+        expected_count - predicted_count
+    )
 
 
-def load_model(device, ckpt_path):
-    model = UNet(in_channels=2, out_channels=NUM_CLASSES, base=16).to(device)
-    ckpt = torch.load(ckpt_path, map_location=device)
+def load_model(device, checkpoint_path):
+    """
+    Load the U-Net checkpoint used for the hill-climbing experiment.
+    """
+    model = UNet(
+        in_channels=2,
+        out_channels=NUM_CLASSES,
+        base=16,
+    ).to(device)
 
-    if "generator_state" in ckpt:
-        model.load_state_dict(ckpt["generator_state"])
-    else:
-        model.load_state_dict(ckpt["model_state"])
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location=device,
+    )
 
+    if "model_state" not in checkpoint:
+        raise KeyError(
+            "The checkpoint does not contain 'model_state'. "
+            "Use a U-Net checkpoint produced by train_unet.py."
+        )
+
+    model.load_state_dict(
+        checkpoint["model_state"]
+    )
     model.eval()
-    print("Loaded checkpoint epoch:", ckpt.get("epoch", "unknown"))
-    print("Checkpoint val IoU:", ckpt.get("val_iou", "unknown"))
-    return model
+
+    return model, checkpoint
 
 
 def main():
@@ -222,10 +402,23 @@ def main():
     device = get_device()
     print("Device:", device)
 
-    ds = FloorplanNPZDataset(args.data_dir, max_count=args.max_count)
+    dataset = FloorplanNPZDataset(
+        args.data_dir,
+        max_count=args.max_count,
+    )
     split = load_split(args.split_path)
-    test_ds = Subset(ds, split["test"])
-    loader = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=0)
+
+    test_indices = split["test"]
+    test_dataset = Subset(
+        dataset,
+        test_indices,
+    )
+    loader = DataLoader(
+        test_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
 
     print(f"Data folder: {args.data_dir}")
     print(f"Split file: {args.split_path}")
@@ -234,90 +427,356 @@ def main():
     print(f"Output CSV: {args.out_csv}")
     print(f"Hill-climbing kernel size: {args.kernel_size}")
     print(f"Hill-climbing iterations: {args.iterations}")
-    print(f"Evaluating U-Net + hill-climbing on held-out test samples: {len(test_ds)}")
+    print(
+        "Evaluating U-Net + hill-climbing on held-out test samples: "
+        f"{len(test_dataset)}"
+    )
+    print(
+        "Room-count definition: connected components in one combined "
+        "non-background, non-wall mask."
+    )
 
-    model = load_model(device, args.ckpt_path)
+    model, checkpoint = load_model(
+        device,
+        args.ckpt_path,
+    )
+
+    print(
+        "Loaded checkpoint: "
+        f"epoch={checkpoint.get('epoch', 'unknown')}, "
+        f"stored_val_iou={checkpoint.get('val_iou', 'unknown')}"
+    )
 
     rows = []
-    for idx, (x, y) in enumerate(loader):
-        x = x.to(device)
-        y = y.to(device)
+
+    for test_position, (inputs, targets) in enumerate(
+        loader
+    ):
+        inputs = inputs.to(device)
+        targets = targets.to(device)
 
         with torch.no_grad():
-            logits = model(x)
-            pred = torch.argmax(logits, dim=1)
+            logits = model(inputs)
+            predictions = torch.argmax(
+                logits,
+                dim=1,
+            )
 
-        pred_np = pred[0].cpu().numpy().astype(np.uint8)
-        gt_np = y[0].cpu().numpy().astype(np.uint8)
-        outline_np = (x[0, 0].detach().cpu().numpy() > 0.5).astype(np.uint8)
-        expected_room_count = get_expected_room_count_from_input(x, max_count=args.max_count)
+        pred_mask = (
+            predictions[0]
+            .cpu()
+            .numpy()
+            .astype(np.uint8)
+        )
+        gt_mask = (
+            targets[0]
+            .cpu()
+            .numpy()
+            .astype(np.uint8)
+        )
 
-        # Apply hill-climbing refinement to U-Net prediction
+        support_mask = (
+            inputs[0, 0]
+            .detach()
+            .cpu()
+            .numpy()
+            > 0.5
+        ).astype(np.uint8)
+
+        expected_room_count = (
+            get_expected_room_count_from_input(
+                inputs,
+                max_count=args.max_count,
+            )
+        )
+
         pred_refined = refine_semantic_mask_hillclimb(
-            pred_np,
+            pred_mask,
             num_classes=NUM_CLASSES,
             ignore_classes=(BG,),
             kernel_size=args.kernel_size,
             iterations=args.iterations,
+        ).astype(np.uint8)
+
+        gt_room_count = (
+            count_rooms_from_semantic_mask(
+                gt_mask
+            )
+        )
+        predicted_room_count = (
+            count_rooms_from_semantic_mask(
+                pred_refined
+            )
         )
 
-        # Metrics
-        miou = mean_iou(pred_refined, gt_np, ignore=(BG,))  # ignore background by default
+        target_count_matches_gt = int(
+            expected_room_count
+            == gt_room_count
+        )
 
-        gt_inst = extract_instances(gt_np)
-        pr_inst = extract_instances(pred_refined)
-        bvr = boundary_violation_rate(pred_refined, outline_np)
-        rc_error, predicted_room_count = room_count_error(expected_room_count, pr_inst)
+        count_error = room_count_error(
+            expected_room_count,
+            predicted_room_count,
+        )
 
-        # adjacency similarity between class-level edges
-        gt_edges = adjacency_edges(gt_inst)
-        pr_edges = adjacency_edges(pr_inst)
-        adj_f1 = f1_edges(pr_edges, gt_edges)
+        miou = mean_iou(
+            pred_refined,
+            gt_mask,
+            ignore=(BG,),
+        )
 
-        # compactness: average over instances
-        gt_comp = [compactness_of_instance(i["mask"]) for i in gt_inst]
-        pr_comp = [compactness_of_instance(i["mask"]) for i in pr_inst]
-        gt_comp_mean = float(np.mean(gt_comp)) if gt_comp else 0.0
-        pr_comp_mean = float(np.mean(pr_comp)) if pr_comp else 0.0
+        # Class-specific instances remain necessary for adjacency and
+        # compactness, but they are not used for room-count error.
+        gt_instances = extract_instances(
+            gt_mask
+        )
+        predicted_instances = extract_instances(
+            pred_refined
+        )
 
-        rows.append({
-            "idx": idx,
-            "miou_no_bg": miou,
-            "adj_f1": adj_f1,
-            "compact_gt": gt_comp_mean,
-            "compact_pred": pr_comp_mean,
-            "num_inst_gt": len(gt_inst),
-            "num_inst_pred": len(pr_inst),
-            "boundary_violation_rate": bvr,
-            "expected_room_count": expected_room_count,
-            "predicted_room_count": predicted_room_count,
-            "room_count_error": rc_error,
-        })
+        boundary_violation = (
+            boundary_violation_rate(
+                pred_refined,
+                support_mask,
+            )
+        )
 
-        if (idx + 1) % 50 == 0:
-            print(f"[{idx+1}/{len(test_ds)}] mIoU={miou:.3f} adjF1={adj_f1:.3f} comp_pred={pr_comp_mean:.3f} BVR={bvr:.3f} RCerr={rc_error}")
+        gt_edges = adjacency_edges(
+            gt_instances
+        )
+        predicted_edges = adjacency_edges(
+            predicted_instances
+        )
+        adjacency_f1 = f1_edges(
+            predicted_edges,
+            gt_edges,
+        )
 
-    # Save CSV
-    os.makedirs(os.path.dirname(args.out_csv) or ".", exist_ok=True)
-    with open(args.out_csv, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        gt_compactness_values = [
+            compactness_of_instance(
+                instance["mask"]
+            )
+            for instance in gt_instances
+        ]
+        predicted_compactness_values = [
+            compactness_of_instance(
+                instance["mask"]
+            )
+            for instance in predicted_instances
+        ]
+
+        gt_compactness = (
+            float(
+                np.mean(
+                    gt_compactness_values
+                )
+            )
+            if gt_compactness_values
+            else 0.0
+        )
+        predicted_compactness = (
+            float(
+                np.mean(
+                    predicted_compactness_values
+                )
+            )
+            if predicted_compactness_values
+            else 0.0
+        )
+
+        rows.append(
+            {
+                "idx": test_position,
+                "dataset_index": int(
+                    test_indices[test_position]
+                ),
+                "miou_no_bg": miou,
+                "adj_f1": adjacency_f1,
+                "compact_gt": gt_compactness,
+                "compact_pred": predicted_compactness,
+                "num_inst_gt": len(
+                    gt_instances
+                ),
+                "num_inst_pred": len(
+                    predicted_instances
+                ),
+                "boundary_violation_rate": (
+                    boundary_violation
+                ),
+                "expected_room_count": (
+                    expected_room_count
+                ),
+                "gt_room_count_combined": (
+                    gt_room_count
+                ),
+                "target_count_matches_gt": (
+                    target_count_matches_gt
+                ),
+                "predicted_room_count": (
+                    predicted_room_count
+                ),
+                "room_count_error": (
+                    count_error
+                ),
+            }
+        )
+
+        if (test_position + 1) % 50 == 0:
+            print(
+                f"[{test_position + 1}/"
+                f"{len(test_dataset)}] "
+                f"mIoU={miou:.3f} "
+                f"adjF1={adjacency_f1:.3f} "
+                f"comp_pred={predicted_compactness:.3f} "
+                f"BVR={boundary_violation:.3f} "
+                f"expected={expected_room_count} "
+                f"predicted={predicted_room_count} "
+                f"RCerr={count_error}"
+            )
+
+    if not rows:
+        raise RuntimeError(
+            "No evaluation rows were produced."
+        )
+
+    output_directory = (
+        os.path.dirname(args.out_csv)
+        or "."
+    )
+    os.makedirs(
+        output_directory,
+        exist_ok=True,
+    )
+
+    with open(
+        args.out_csv,
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as output_file:
+        writer = csv.DictWriter(
+            output_file,
+            fieldnames=list(rows[0].keys()),
+        )
         writer.writeheader()
         writer.writerows(rows)
 
-    # Print summary
-    miou_mean = float(np.mean([r["miou_no_bg"] for r in rows]))
-    adj_mean = float(np.mean([r["adj_f1"] for r in rows]))
-    comp_mean = float(np.mean([r["compact_pred"] for r in rows]))
-    bvr_mean = float(np.mean([r["boundary_violation_rate"] for r in rows]))
-    room_count_mae = float(np.mean([r["room_count_error"] for r in rows]))
+    mean_miou = float(
+        np.mean(
+            [
+                row["miou_no_bg"]
+                for row in rows
+            ]
+        )
+    )
+    mean_adjacency_f1 = float(
+        np.mean(
+            [
+                row["adj_f1"]
+                for row in rows
+            ]
+        )
+    )
+    mean_compactness = float(
+        np.mean(
+            [
+                row["compact_pred"]
+                for row in rows
+            ]
+        )
+    )
+    mean_boundary_violation = float(
+        np.mean(
+            [
+                row[
+                    "boundary_violation_rate"
+                ]
+                for row in rows
+            ]
+        )
+    )
+    room_count_mae = float(
+        np.mean(
+            [
+                row["room_count_error"]
+                for row in rows
+            ]
+        )
+    )
+    mean_expected_room_count = float(
+        np.mean(
+            [
+                row["expected_room_count"]
+                for row in rows
+            ]
+        )
+    )
+    mean_predicted_room_count = float(
+        np.mean(
+            [
+                row["predicted_room_count"]
+                for row in rows
+            ]
+        )
+    )
+
+    target_count_mismatches = sum(
+        1
+        for row in rows
+        if not row["target_count_matches_gt"]
+    )
 
     print("\nSaved:", args.out_csv)
-    print(f"Summary over {len(rows)} samples:")
-    print(f" mean mIoU (no bg): {miou_mean:.3f}")
-    print(f" mean adjacency F1: {adj_mean:.3f}")
-    print(f" mean compactness (pred): {comp_mean:.3f}")
-    print(f" mean boundary violation rate: {bvr_mean:.3f}")
-    print(f" mean room-count MAE: {room_count_mae:.3f}")
+    print(
+        f"Summary over {len(rows)} samples:"
+    )
+    print(
+        f" mean mIoU (no bg): "
+        f"{mean_miou:.3f}"
+    )
+    print(
+        f" mean adjacency F1: "
+        f"{mean_adjacency_f1:.3f}"
+    )
+    print(
+        " mean compactness (pred): "
+        f"{mean_compactness:.3f}"
+    )
+    print(
+        " mean boundary violation rate: "
+        f"{mean_boundary_violation:.3f}"
+    )
+    print(
+        " mean expected room count: "
+        f"{mean_expected_room_count:.3f}"
+    )
+    print(
+        " mean predicted room count: "
+        f"{mean_predicted_room_count:.3f}"
+    )
+    print(
+        f" mean room-count MAE: "
+        f"{room_count_mae:.3f}"
+    )
+    print(
+        " encoded-count versus ground-truth combined-count "
+        f"mismatches: {target_count_mismatches}/"
+        f"{len(rows)}"
+    )
+
+    if target_count_mismatches:
+        print(
+            "WARNING: Some encoded room counts do not match the "
+            "combined-component count reconstructed from the ground-truth "
+            "mask. Review the preprocessing rule before treating the "
+            "room-count metric as final."
+        )
+    else:
+        print(
+            "Room-count consistency check passed: every encoded target "
+            "count matched the combined-component count reconstructed "
+            "from the ground-truth mask."
+        )
 
 
 if __name__ == "__main__":
