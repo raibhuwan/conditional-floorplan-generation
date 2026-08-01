@@ -1,0 +1,165 @@
+{
+  "test_purpose": "Evidence only: assess sensitivity to the encoded connected-region count, determinism, and runtime. This test does not establish exact architectural room-count control.",
+  "system": {
+    "platform": "macOS-26.5.1-arm64-arm-64bit",
+    "python_version": "3.9.6",
+    "torch_version": "2.8.0",
+    "device": "mps",
+    "mps_available": true,
+    "cuda_available": false
+  },
+  "inputs": {
+    "support_path": "/Users/bhuwanrai/my-projects/floorplan/conditional-floorplan-generation/inputs/boundary.png",
+    "support_foreground_fraction": 0.4483795166015625,
+    "checkpoint_path": "/Users/bhuwanrai/my-projects/floorplan/conditional-floorplan-generation/outputs/checkpoints/unet_base16_best.pt",
+    "counts_tested": [
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "max_count": 32,
+    "image_size": 256,
+    "checkpoint_metadata": {
+      "epoch": 20,
+      "stored_validation_iou": 0.39983105807416947
+    }
+  },
+  "condition_sensitivity": {
+    "unique_raw_outputs": 5,
+    "unique_morphology_outputs": 5,
+    "all_tested_raw_outputs_identical": false,
+    "all_tested_morphology_outputs_identical": false,
+    "adjacent_comparisons": [
+      {
+        "from_count": 3,
+        "to_count": 4,
+        "raw_changed_pixels": 697,
+        "raw_changed_fraction": 0.0106353759765625,
+        "morphology_changed_pixels": 832,
+        "morphology_changed_fraction": 0.0126953125
+      },
+      {
+        "from_count": 4,
+        "to_count": 5,
+        "raw_changed_pixels": 857,
+        "raw_changed_fraction": 0.0130767822265625,
+        "morphology_changed_pixels": 1071,
+        "morphology_changed_fraction": 0.0163421630859375
+      },
+      {
+        "from_count": 5,
+        "to_count": 6,
+        "raw_changed_pixels": 928,
+        "raw_changed_fraction": 0.01416015625,
+        "morphology_changed_pixels": 1098,
+        "morphology_changed_fraction": 0.016754150390625
+      },
+      {
+        "from_count": 6,
+        "to_count": 7,
+        "raw_changed_pixels": 1139,
+        "raw_changed_fraction": 0.0173797607421875,
+        "morphology_changed_pixels": 1418,
+        "morphology_changed_fraction": 0.021636962890625
+      }
+    ]
+  },
+  "determinism": {
+    "repeated_count": 4,
+    "repeat_runs": 3,
+    "exactly_identical": true,
+    "hashes": [
+      "badce961abee870b4fb631f02799ab48060086b200d152e887ab2f20948a91c9",
+      "badce961abee870b4fb631f02799ab48060086b200d152e887ab2f20948a91c9",
+      "badce961abee870b4fb631f02799ab48060086b200d152e887ab2f20948a91c9"
+    ],
+    "changed_pixels_against_first": [
+      0,
+      0
+    ]
+  },
+  "runtime": {
+    "checkpoint_load_ms": 195.41004200000245,
+    "warmup_runs": 5,
+    "timing_runs": 30,
+    "inference_only": {
+      "mean_ms": 8.64393743333333,
+      "median_ms": 8.666999999999092,
+      "min_ms": 8.306749999999141,
+      "max_ms": 9.009875000000278,
+      "p95_ms": 8.904268600000265
+    },
+    "morphology_only": {
+      "mean_ms": 3.268936166666355,
+      "median_ms": 3.226479499998547,
+      "min_ms": 2.860625000000283,
+      "max_ms": 4.322457999997198,
+      "p95_ms": 3.6729247000003786
+    },
+    "note": "Inference excludes checkpoint loading and image saving. Morphology is timed separately."
+  },
+  "results": [
+    {
+      "requested_encoded_count": 3,
+      "normalised_condition": 0.09375,
+      "predicted_connected_regions_raw": 5,
+      "predicted_connected_regions_morphology": 2,
+      "non_background_pixels_raw": 29385,
+      "non_background_pixels_morphology": 28821,
+      "raw_sha256": "8bbadbb83f02e7e4603dfbb1d3be2ca5704e676002172fb107d0e76cd88b7ce7",
+      "morphology_sha256": "e0c456f4f990eed180b8311c93fc30f16ff779a5fd0f3d5d6d67e5d595512fbf",
+      "single_inference_ms": 492.65762499999965,
+      "single_morphology_ms": 16.366624999999857
+    },
+    {
+      "requested_encoded_count": 4,
+      "normalised_condition": 0.125,
+      "predicted_connected_regions_raw": 4,
+      "predicted_connected_regions_morphology": 2,
+      "non_background_pixels_raw": 29385,
+      "non_background_pixels_morphology": 28791,
+      "raw_sha256": "badce961abee870b4fb631f02799ab48060086b200d152e887ab2f20948a91c9",
+      "morphology_sha256": "e7ba0b116e1676a268e1e03151c5d830d7186f4f0d2590cc689e6329d907c786",
+      "single_inference_ms": 12.34995799999794,
+      "single_morphology_ms": 3.2342909999982794
+    },
+    {
+      "requested_encoded_count": 5,
+      "normalised_condition": 0.15625,
+      "predicted_connected_regions_raw": 3,
+      "predicted_connected_regions_morphology": 2,
+      "non_background_pixels_raw": 29385,
+      "non_background_pixels_morphology": 28705,
+      "raw_sha256": "4115796b58da0c11a28204198ca99b5166d7f78d4496a353bf98a615564a9229",
+      "morphology_sha256": "365811d4554af3fe9c0d2821f64910e87c14bf72fd9ab19bf61255232912afbb",
+      "single_inference_ms": 12.11049999999858,
+      "single_morphology_ms": 3.6421249999989413
+    },
+    {
+      "requested_encoded_count": 6,
+      "normalised_condition": 0.1875,
+      "predicted_connected_regions_raw": 4,
+      "predicted_connected_regions_morphology": 2,
+      "non_background_pixels_raw": 29385,
+      "non_background_pixels_morphology": 28785,
+      "raw_sha256": "ec27ab0e7dc4028ac8a313c9306f329864fcffa7239d448019ff2ad24c0bf0a0",
+      "morphology_sha256": "1c366ff9823b8a97ff1df25e6f9e3017a05d395745b15a0401522d868576bc19",
+      "single_inference_ms": 10.954125000001369,
+      "single_morphology_ms": 3.1518750000003593
+    },
+    {
+      "requested_encoded_count": 7,
+      "normalised_condition": 0.21875,
+      "predicted_connected_regions_raw": 4,
+      "predicted_connected_regions_morphology": 2,
+      "non_background_pixels_raw": 29385,
+      "non_background_pixels_morphology": 28650,
+      "raw_sha256": "f919204379b8790488eaac1e11d2b4e6f701699f5fbcd2bf914ff665157ec863",
+      "morphology_sha256": "13d8925a697a54ba5baf2cd12ffba47eb3f97cf30dd2f5aab1293f7367231766",
+      "single_inference_ms": 11.112041999997047,
+      "single_morphology_ms": 3.5001659999984724
+    }
+  ]
+}

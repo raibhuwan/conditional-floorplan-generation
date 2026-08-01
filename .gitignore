@@ -30,3 +30,18 @@ outputs/
 *.pth
 *.ckpt
 *.csv
+
+# ---- Final dissertation evidence ----
+!evidence/
+!evidence/**/*.csv
+!evidence/**/*.json
+!evidence/**/*.txt
+!evidence/**/*.md
+
+# ---- Local evidence archives ----
+outputs.zip
+preprocessing_evidence_bundle.zip
+
+# ---- Local verification notes ----
+condition_sensitivity_evidence_audit.md
+preprocessing_evidence_audit.md

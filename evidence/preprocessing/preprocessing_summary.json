@@ -1,0 +1,23 @@
+{
+  "source_folder": "data/processed_npz_full",
+  "clean_folder": "data/processed_npz_clean_full",
+  "minimum_encoded_count_threshold": 3,
+  "total_processed_npz": 4566,
+  "total_clean_npz": 3761,
+  "filter_valid_count": 3761,
+  "filter_excluded_count": 805,
+  "excluded_by_reason": {
+    "kept": 3761,
+    "room_count_below_min": 805
+  },
+  "source_minus_clean_count": 805,
+  "clean_minus_source_count": 0,
+  "valid_missing_from_clean_count": 0,
+  "invalid_present_in_clean_count": 0,
+  "encoded_count_statistics": {
+    "minimum": 0,
+    "maximum": 32,
+    "mean": 5.35742444152431,
+    "median": 5.0
+  }
+}

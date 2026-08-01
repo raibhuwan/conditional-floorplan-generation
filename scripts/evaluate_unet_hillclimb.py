@@ -15,7 +15,7 @@ from src.refinement.hillclimb import refine_semantic_mask_hillclimb
 
 DATA_DIR = "data/processed_npz_clean_full"
 SPLIT_PATH = "outputs/splits/split_seed42_full.json"
-CKPT_PATH = "outputs/checkpoints/unet_base16_logged_best.pt"
+CKPT_PATH = "outputs/checkpoints/unet_base16_best.pt"
 
 MAX_COUNT = 32
 NUM_CLASSES = 9

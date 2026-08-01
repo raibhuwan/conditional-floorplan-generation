@@ -16,8 +16,8 @@ from src.refinement.morphology import refine_semantic_mask_morphology
 
 DATA_DIR = "data/processed_npz_clean_full"
 SPLIT_PATH = "outputs/splits/split_seed42_full.json"
-UNET_CKPT = "outputs/checkpoints/unet_base16_logged_best.pt"
-CGAN_CKPT = "outputs/checkpoints/cgan_unet_patchgan_logged_best.pt"
+UNET_CKPT = "outputs/checkpoints/unet_base16_best.pt"
+CGAN_CKPT = "outputs/checkpoints/cgan_unet_patchgan_best.pt"
 
 MAX_COUNT = 32
 NUM_CLASSES = 9

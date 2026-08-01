@@ -57,7 +57,7 @@ def parse_args():
         "--max_count",
         type=int,
         default=DEFAULT_MAX_COUNT,
-        help="Maximum room count used to normalise the room-count condition channel.",
+        help="Maximum encoded connected-region used to normalise the room-count condition channel.",
     )
     parser.add_argument(
         "--batch_size",
