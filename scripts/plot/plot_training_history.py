@@ -8,7 +8,11 @@ UNET_LOG = Path("outputs/logs/unet_training_history.csv")
 CGAN_LOG = Path("outputs/logs/cgan_training_history.csv")
 
 FIGURE_OUTPUT = Path(
-    "outputs/figures/training_validation_miou.png"
+    "outputs/figures/figure_5_1_training_validation_miou.png"
+)
+
+PDF_OUTPUT = Path(
+    "outputs/figures/figure_5_1_training_validation_miou.pdf"
 )
 
 SUMMARY_OUTPUT = Path(
@@ -183,9 +187,16 @@ def main() -> None:
         bbox_inches="tight",
     )
 
+    plt.savefig(
+        PDF_OUTPUT,
+        format="pdf",
+        bbox_inches="tight",
+    )
+
     plt.close()
 
     print(f"Saved figure to: {FIGURE_OUTPUT}")
+    print(f"Saved PDF figure to: {PDF_OUTPUT}")
     print(f"Saved summary to: {SUMMARY_OUTPUT}")
     print()
     print(summary.to_string(index=False))

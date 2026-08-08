@@ -25,7 +25,7 @@ BG = 0
 
 OUTPUT_PATH = (
     "outputs/figures/"
-    "figure_5_7_refinement_comparison.png"
+    "figure_5_4_refinement_comparison.png"
 )
 
 METRIC_FILES = {
@@ -585,7 +585,7 @@ def main():
         dataset_index,
     )
     print(
-        "Requested room count:",
+        "Encoded connected-region count:",
         requested_count,
     )
     print("Saved:", output_path)

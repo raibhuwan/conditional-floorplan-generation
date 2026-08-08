@@ -147,7 +147,7 @@ bars = ax.barh(
 )
 
 ax.invert_yaxis()
-ax.set_xlabel("Mean absolute room-count error")
+ax.set_xlabel("Connected-region count Mean Absolute Error")
 ax.set_ylabel("Model configuration")
 ax.set_xlim(0, 4.2)
 ax.grid(
@@ -173,13 +173,13 @@ for bar, value in zip(
 fig.tight_layout()
 
 fig.savefig(
-    OUTPUT_DIR / "figure_5_3_room_count_mae.png",
+    OUTPUT_DIR / "figure_5_3_connected_region_count_mae.png",
     dpi=300,
     bbox_inches="tight",
 )
 
 fig.savefig(
-    OUTPUT_DIR / "figure_5_3_room_count_mae.pdf",
+    OUTPUT_DIR / "figure_5_3_connected_region_count_mae.pdf",
     bbox_inches="tight",
 )
 
