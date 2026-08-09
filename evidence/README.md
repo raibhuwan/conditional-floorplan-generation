@@ -1,0 +1,114 @@
+# Final Dissertation Evidence
+
+This directory contains the verified evidence used for the final evaluation of the conditional semantic floor-plan generation project. Where older development outputs conflict with these files, the evidence directory should be treated as the final source for dissertation numbers.
+
+## Terminology Note
+
+Historical implementation names and filenames use terms such as `outline`, `room_count` and `room_count_fixed`.
+
+In the final dissertation:
+
+- `outline` is described as the **filled binary floor-plan support mask**;
+- `room_count` is described as the **encoded connected-region count**; and
+- `room_count_error` is reported as **connected-region count Mean Absolute Error (MAE)**.
+
+The count is derived from connected semantic regions and is not a verified architectural room-instance count.
+
+## Dataset Split
+
+`evidence/splits/split_seed42_full.json` contains the fixed seed-42 split:
+
+- training: 2,632 samples;
+- validation: 564 samples; and
+- test: 565 samples.
+
+The split was created at floor-sample level. It was not grouped by original building, which is reported as a project limitation.
+
+## Training Evidence
+
+`evidence/training/` contains:
+
+- the 30-epoch U-Net training history;
+- the 30-epoch Pix2Pix-style cGAN training history;
+- the selected-checkpoint summary; and
+- the common sample-level validation mIoU comparison.
+
+The selected checkpoint for both models was epoch 20.
+
+| Model | Selected epoch | Common validation mIoU | Training mIoU at epoch 20 | Final training mIoU | Final validation mIoU |
+|---|---:|---:|---:|---:|---:|
+| U-Net | 20 | 0.399831 | 0.621130 | 0.736845 | 0.369020 |
+| Pix2Pix-style cGAN | 20 | 0.386000 | 0.659419 | 0.748921 | 0.351045 |
+
+Approximate total training time from the epoch histories was 54.0 minutes for U-Net and 101.7 minutes for the cGAN.
+
+The original U-Net training history contains a different validation aggregation that produced a higher logged value around 0.4706. The final dissertation uses the common sample-level validation calculation above so that both selected checkpoints are compared using the same method.
+
+Model checkpoints are not included in this evidence package because checkpoint files are excluded from the review archive.
+
+## Final Held-Out Evaluation
+
+`evidence/metrics/` contains the six authoritative per-sample evaluation files:
+
+- U-Net baseline;
+- U-Net with morphology;
+- U-Net with hill-climbing;
+- cGAN baseline;
+- cGAN with morphology; and
+- cGAN with hill-climbing.
+
+Each file contains results for all 565 held-out test samples.
+
+Mean results are:
+
+| Method | mIoU | Adj F1 | Compactness | BVR | Connected-region count MAE |
+|---|---:|---:|---:|---:|---:|
+| U-Net baseline | 0.375276 | 0.190705 | 0.507777 | 0.000000 | 2.792920 |
+| U-Net + morphology | **0.381116** | **0.193860** | 0.629373 | 0.000565 | 2.955752 |
+| U-Net + hill-climbing | 0.291573 | 0.192182 | 0.550903 | 0.135012 | 3.725664 |
+| cGAN baseline | 0.362964 | 0.191560 | 0.507818 | 0.000001 | **2.545133** |
+| cGAN + morphology | 0.367379 | 0.189786 | **0.645706** | 0.000533 | 2.646018 |
+| cGAN + hill-climbing | 0.280923 | 0.185532 | 0.558177 | 0.135018 | 3.392920 |
+
+The filenames retain the historical term `room_count_fixed` for traceability. The corrected count measure compares the encoded count condition with connected components calculated from one combined non-background, non-wall prediction mask using eight-connectivity.
+
+Class-specific connected components with a minimum area of 30 pixels are used separately for adjacency and compactness evaluation.
+
+## Final Result Interpretation
+
+- U-Net baseline has higher mIoU than the cGAN baseline.
+- cGAN baseline has the lowest connected-region count MAE.
+- U-Net with morphology has the highest mIoU and adjacency F1.
+- cGAN with morphology has the highest compactness.
+- Morphology slightly worsens connected-region count MAE for both models.
+- Hill-climbing increases compactness but substantially reduces mIoU, increases BVR and increases connected-region count MAE relative to the corresponding baselines.
+
+The final selected generation route is U-Net with morphology because it provides the strongest overall balance for the project objective, not because it has the lowest count MAE.
+
+## Preprocessing Evidence
+
+`evidence/preprocessing/` records:
+
+- all 4,566 processed samples;
+- the 3,761 retained samples;
+- the 805 excluded samples;
+- the encoded connected-region count distribution; and
+- representative excluded examples.
+
+The exclusion threshold of three connected regions was a practical preprocessing heuristic and is not presented as an architectural standard.
+
+## Condition-Sensitivity Evidence
+
+`evidence/condition_sensitivity/` contains the supplementary test in which the same binary support mask was evaluated with encoded counts from 3 to 7.
+
+The outputs changed when the encoded count changed, but the resulting connected-region count did not change monotonically. Repeated inference with the same input was deterministic. The evidence therefore supports condition sensitivity but not exact architectural room-count control.
+
+## Supporting Scripts
+
+Scripts used to construct supplementary evidence are stored in:
+
+```text
+scripts/evidence/
+```
+
+For the final dissertation, use the evidence in this directory rather than older development metric files retained under `outputs/`.

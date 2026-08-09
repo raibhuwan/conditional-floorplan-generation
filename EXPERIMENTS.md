@@ -1,36 +1,40 @@
 # Experiment Log
 
-This document records the main training experiments, evaluation results and refinement observations for the conditional semantic floor plan generation framework. The project focuses on generating two-dimensional semantic floor plan masks from a building outline and room-count condition, then evaluating the generated layouts using both semantic and spatial metrics.
+This document records the main development and final experiments for the conditional semantic floor-plan generation framework. The implemented system generates two-dimensional semantic masks from two lightweight conditions: a filled binary floor-plan support mask and an encoded connected-region count. The implementation retains historical variable names such as `outline` and `room_count`, but the final dissertation uses the more precise terminology because the count is derived from connected semantic regions rather than manually labelled architectural room instances.
 
 The experiments cover:
-- conditional U-Net baseline training,
-- Pix2Pix-style conditional GAN training,
-- dataset scaling behaviour,
-- held-out test evaluation,
-- morphology and hill-climbing refinement,
-- and final manual generation from boundary and room-count input.
 
-## Metric Note
+- conditional U-Net baseline training;
+- Pix2Pix-style conditional GAN training;
+- dataset scaling behaviour;
+- held-out test evaluation;
+- morphology and hill-climbing refinement;
+- condition-sensitivity checks; and
+- final manual generation from a support image and encoded count condition.
 
-Validation IoU values reported during training represent epoch-based validation performance used for checkpoint selection.
+## Authoritative Evidence Note
 
-Final mIoU values are obtained from the post-training held-out test evaluation pipeline. These values are therefore not directly equivalent to training-stage validation IoU because the final evaluation is performed on unseen test samples and includes additional spatial metrics.
+The final dissertation results are based on EXP-05 and the verified files under `evidence/`. The six files in `evidence/metrics/` are the authoritative held-out test results for all 565 test samples.
+
+The metric filenames retain the historical term `room_count_fixed` for traceability. In the dissertation, this measure is described as **connected-region count Mean Absolute Error (MAE)**. It compares the supplied encoded count condition with the connected-component count obtained from the combined non-background, non-wall prediction mask using eight-connectivity.
+
+Development experiments EXP-01 to EXP-04 are retained for project history. Their logged validation values and earlier count metrics should not be substituted for the final EXP-05 evidence.
 
 ## Experiment Summary
 
-| Experiment | Purpose | Clean Dataset Size | Best Validation IoU |
+| Experiment | Purpose | Clean Dataset Size | Validation evidence |
 |---|---|---:|---:|
-| EXP-01 | Initial cGAN training | 492 | 0.269 |
-| EXP-02 | Stabilised cGAN training | 492 | 0.278 |
-| EXP-03 | Increased dataset training | 1004 | 0.319 |
-| EXP-04 | Development scaling run | 1966 | 0.373 |
-| EXP-05 | Final full high_quality_architectural run | 3761 | 0.4706 U-Net / 0.3860 cGAN |
+| EXP-01 | Initial cGAN training | 492 | Logged best validation IoU: 0.269 |
+| EXP-02 | Stabilised cGAN training | 492 | Logged best validation IoU: 0.278 |
+| EXP-03 | Increased dataset training | 1,004 | Logged best validation IoU: 0.319 |
+| EXP-04 | Development scaling run | 1,966 | Logged best validation IoU: 0.373 |
+| EXP-05 | Final full `high_quality_architectural` run | 3,761 | Common validation mIoU: 0.399831 U-Net / 0.386000 cGAN |
 
-The early experiments were used to test preprocessing, adversarial stability and dataset scaling. The final results reported for the project are based on EXP-05, which uses the filtered full high_quality_architectural subset of CubiCasa5K.
+The early experiments were used to test preprocessing, adversarial stability and dataset scaling. The final dissertation results are based on EXP-05.
 
 ---
 
-## EXP-01 — Initial cGAN Training
+## EXP-01 - Initial cGAN Training
 
 ### Configuration
 
@@ -47,17 +51,17 @@ The early experiments were used to test preprocessing, adversarial stability and
 
 ### Results
 
-- Best validation IoU: 0.269
+- Best logged validation IoU: 0.269
 - Final training IoU: 0.624
 - Final validation IoU: 0.235
 
-### Observations
+### Observation
 
-The discriminator rapidly became overconfident during training. Discriminator loss collapsed close to zero and generator adversarial loss increased, indicating unstable adversarial optimisation. The model showed early semantic learning but had poor generalisation.
+The discriminator became overconfident early in training. Discriminator loss moved close to zero while the generator adversarial loss increased, indicating unstable adversarial optimisation. The run showed early semantic learning but weak validation performance.
 
 ---
 
-## EXP-02 — Stabilised cGAN Training
+## EXP-02 - Stabilised cGAN Training
 
 ### Configuration
 
@@ -75,22 +79,22 @@ The discriminator rapidly became overconfident during training. Discriminator lo
 
 ### Results
 
-- Best validation IoU: 0.278
+- Best logged validation IoU: 0.278
 - Final training IoU: 0.660
 - Final validation IoU: 0.243
 
-### Observations
+### Observation
 
-Lowering the discriminator learning rate, increasing the cross-entropy weight and applying label smoothing improved adversarial stability. Validation IoU improved slightly, although overfitting remained visible.
+Reducing the discriminator learning rate, increasing the cross-entropy weight and applying one-sided label smoothing improved adversarial stability. Validation performance improved slightly, although overfitting remained visible.
 
 ---
 
-## EXP-03 — Increased Dataset Training
+## EXP-03 - Increased Dataset Training
 
 ### Configuration
 
-- Requested source SVG samples: 1000
-- Clean dataset size: 1004 samples
+- Requested source SVG samples: 1,000
+- Clean dataset size: 1,004 samples
 - Generator: U-Net
 - Discriminator: PatchGAN
 - Batch size: 2
@@ -103,26 +107,26 @@ Lowering the discriminator learning rate, increasing the cross-entropy weight an
 
 ### Results
 
-- Best validation IoU: 0.319
+- Best logged validation IoU: 0.319
 - Final training IoU: 0.740
 - Final validation IoU: 0.313
 
-### Observations
+### Observation
 
-Increasing the dataset size improved validation performance and generalisation. Training became more stable than the earlier 492-sample runs, although overfitting was still present.
+Increasing the dataset size improved validation performance and supported the decision to move to a larger final dataset.
 
 ---
 
-## EXP-04 — Development Scaling Run on 1966 Samples
+## EXP-04 - Development Scaling Run on 1,966 Samples
 
-EXP-04 was used as a controlled development run to test training stability, evaluation scripts and refinement methods before moving to the full high_quality_architectural subset.
+EXP-04 was a development run used to test training stability, evaluation scripts and refinement methods before the final full-dataset experiment.
 
 ### Dataset and Split
 
-- Requested source SVG samples: 2000
-- Clean dataset size after filtering: 1966 samples
-- Split: train 1376 / validation 294 / test 296
-- MAX_COUNT: 18
+- Requested source SVG samples: 2,000
+- Clean dataset size after filtering: 1,966 samples
+- Split: 1,376 training / 294 validation / 296 test
+- `MAX_COUNT`: 18
 
 ### Training Configuration
 
@@ -136,16 +140,18 @@ EXP-04 was used as a controlled development run to test training stability, eval
 - Adversarial loss weight: 0.05
 - Real label smoothing: 0.9
 
-### Training Results
+### Logged Training Results
 
 - Best validation IoU: 0.373
 - Best checkpoint epoch: 21
 - Final training IoU: 0.753
 - Final validation IoU: 0.360
 
-### Corrected Held-Out Test Evaluation
+### Historical Held-Out Evaluation
 
-| Method | mIoU | Adj F1 | Compactness | BVR | RC-MAE |
+The following values are retained only as development evidence. The connected-count calculation used during this stage predates the final corrected EXP-05 metric implementation, so the RC-MAE values below should **not** be compared directly with the final dissertation results.
+
+| Method | mIoU | Adj F1 | Compactness | BVR | Historical RC-MAE |
 |---|---:|---:|---:|---:|---:|
 | U-Net baseline | 0.344 | 0.196 | 0.508 | 0.000 | 8.814 |
 | U-Net + morphology | 0.348 | 0.204 | 0.629 | 0.001 | 7.872 |
@@ -154,55 +160,59 @@ EXP-04 was used as a controlled development run to test training stability, eval
 | cGAN + morphology | 0.336 | 0.200 | 0.650 | 0.001 | 8.412 |
 | cGAN + hill-climbing | 0.257 | 0.197 | 0.565 | 0.129 | 5.358 |
 
-### Observations
+### Observation
 
-The 1966-sample run showed that morphology improved compactness and slightly improved semantic performance for both U-Net and cGAN outputs. Hill-climbing reduced room-count error but caused a large drop in mIoU and increased boundary violation. These findings helped define the final evaluation approach used in EXP-05.
+The development run showed that refinement could change semantic and geometric metrics in different directions. This motivated the final multi-metric evaluation used in EXP-05. Final conclusions should be drawn from EXP-05 rather than these development-stage count values.
 
 ---
 
-## EXP-05 — Final Full high_quality_architectural Dataset Run
+## EXP-05 - Final Full `high_quality_architectural` Dataset Run
 
-EXP-05 is the final experiment used for the main project results. It uses the filtered full high_quality_architectural subset of CubiCasa5K.
+EXP-05 is the final experiment used in the dissertation.
 
 ### Dataset Preprocessing
 
-- Dataset source: CubiCasa5K high_quality_architectural category
+- Dataset source: CubiCasa5K `high_quality_architectural` category
 - Processed folder: `data/processed_npz_full`
-- Total processed NPZ files: 4566
+- Successfully processed floor-level samples: 4,566
 - Stored keys: `sem`, `outline`, `room_count`, `sample_id`
 - Semantic mask shape: 256 x 256
-- Outline mask shape: 256 x 256
+- Support-mask shape: 256 x 256
+
+The stored key `outline` contains the filled binary floor-plan support mask used by the final model. The stored key `room_count` contains the encoded connected-region count.
 
 ### Filtering
 
-- Filtering rule: keep samples with `room_count >= 3`
-- Additional checks: valid semantic mask, valid outline mask, valid class range and non-empty masks
+- Filtering rule: retain samples with encoded connected-region count >= 3
 - Clean folder: `data/processed_npz_clean_full`
-- Total clean samples: 3761
-- Dropped samples: 805
-- Drop reason: `room_count_below_min`
+- Retained samples: 3,761
+- Excluded samples: 805
+- Excluded with count 0: 243
+- Excluded with count 1: 187
+- Excluded with count 2: 375
 
-### Room-Count Statistics
+The threshold is an operational preprocessing heuristic rather than an architectural rule.
 
-- Minimum room count: 3
-- Maximum room count: 32
-- Mean room count: 6.254985376229726
-- MAX_COUNT used for conditioning: 32
+### Encoded Count Statistics
+
+- Minimum retained encoded count: 3
+- Maximum encoded count: 32
+- `MAX_COUNT` used for conditioning: 32
 
 ### Train / Validation / Test Split
 
 - Split file: `outputs/splits/split_seed42_full.json`
-- Total samples: 3761
-- Training samples: 2632
+- Total retained samples: 3,761
+- Training samples: 2,632
 - Validation samples: 564
 - Test samples: 565
 - Seed: 42
 
-The training set was used for model learning, the validation set was used for checkpoint selection and tuning, and the held-out test set was reserved for final evaluation on unseen floor plans.
+The training set was used for model learning, the validation set for checkpoint selection, and the held-out test set for final evaluation.
 
 ---
 
-## EXP-05 — U-Net Training
+## EXP-05 - U-Net Training
 
 ### Command
 
@@ -218,34 +228,20 @@ python -m train_unet \
   --checkpoint_name unet_base16_best.pt
 ```
 
-### Configuration
+### Final Evidence
 
-- Model: U-Net baseline
-- Device: MPS
-- Dataset: `data/processed_npz_clean_full`
-- Split file: `outputs/splits/split_seed42_full.json`
-- Batch size: 4
-- Epochs: 30
-- Learning rate: 1e-3
-- Seed: 42
-- Checkpoint: `outputs/checkpoints/unet_base16_best.pt`
+- Selected checkpoint epoch: 20
+- Common sample-level validation mIoU at epoch 20: 0.399831
+- Training mIoU at epoch 20: 0.621130
+- Final epoch training mIoU: 0.736845
+- Final epoch validation mIoU: 0.369020
+- Approximate 30-epoch training time: 54.0 minutes
 
-### Results
-
-- Best validation IoU: 0.4706
-- Best epoch: 20
-- Final epoch training loss: 0.1088
-- Final epoch training IoU: 0.766
-- Final epoch validation loss: 0.7020
-- Final epoch validation IoU: 0.439
-
-### Observation
-
-The U-Net achieved the strongest validation performance. Training IoU continued to increase after epoch 20 while validation IoU decreased, so the epoch 20 checkpoint was used for final evaluation.
+The training script historically logged a different validation aggregation and produced a value of approximately 0.4706 at the selected checkpoint. For the dissertation, both models were re-evaluated using the same common sample-level validation mIoU procedure. The common values in `evidence/training/training_checkpoint_summary.csv` are therefore the values used for the final comparison.
 
 ---
 
-## EXP-05 — cGAN Training
+## EXP-05 - Pix2Pix-Style cGAN Training
 
 ### Command
 
@@ -264,62 +260,40 @@ python -m train_cgan \
   --checkpoint_name cgan_unet_patchgan_best.pt
 ```
 
-### Configuration
+### Final Evidence
 
-- Model: Pix2Pix-style conditional GAN
-- Generator: U-Net
-- Discriminator: PatchGAN
-- Device: MPS
-- Dataset: `data/processed_npz_clean_full`
-- Split file: `outputs/splits/split_seed42_full.json`
-- Batch size: 4
-- Epochs: 30
-- Generator learning rate: 1e-4
-- Discriminator learning rate: 1e-5
-- Cross-entropy loss weight: 30.0
-- Adversarial loss weight: 0.05
-- Seed: 42
-- Checkpoint: `outputs/checkpoints/cgan_unet_patchgan_best.pt`
+- Selected checkpoint epoch: 20
+- Common sample-level validation mIoU at epoch 20: 0.386000
+- Training mIoU at epoch 20: 0.659419
+- Final epoch training mIoU: 0.748921
+- Final epoch validation mIoU: 0.351045
+- Approximate 30-epoch training time: 101.7 minutes
 
-### Results
-
-- Best validation IoU: 0.3860
-- Best epoch: 20
-- Final epoch discriminator loss: 0.1728
-- Final epoch generator loss: 3.4959
-- Final epoch cross-entropy loss: 0.1042
-- Final epoch GAN loss: 7.3808
-- Final epoch training IoU: 0.749
-- Final epoch validation CE: 0.7073
-- Final epoch validation IoU: 0.351
-
-### Observation
-
-The cGAN trained stably with the reduced discriminator learning rate and low adversarial loss weight. However, its best validation IoU remained lower than the U-Net baseline, indicating that the adversarial component did not improve semantic validation performance in the final full-dataset run.
+The cGAN remained below the U-Net on the common validation mIoU comparison despite achieving higher training mIoU.
 
 ---
 
-## EXP-05 — Final Held-Out Test Results
+## EXP-05 - Final Held-Out Test Results
 
-The following table reports final performance on the 565-sample held-out test set.
+The following table contains the authoritative mean results from the six files in `evidence/metrics/`. All configurations were evaluated on the same 565 held-out test samples.
 
-| Method | mIoU | Adj F1 | Compactness | BVR | RC-MAE |
+| Method | mIoU | Adj F1 | Compactness | BVR | Connected-region count MAE |
 |---|---:|---:|---:|---:|---:|
-| U-Net baseline | 0.375 | 0.191 | 0.508 | 0.000 | 8.287 |
-| U-Net + morphology | 0.381 | 0.194 | 0.629 | 0.001 | 7.156 |
-| U-Net + hill-climbing | 0.292 | 0.192 | 0.551 | 0.135 | 4.361 |
-| cGAN baseline | 0.363 | 0.192 | 0.508 | 0.000 | 9.377 |
-| cGAN + morphology | 0.367 | 0.190 | 0.646 | 0.001 | 8.550 |
-| cGAN + hill-climbing | 0.281 | 0.186 | 0.558 | 0.135 | 5.513 |
+| U-Net baseline | 0.375276 | 0.190705 | 0.507777 | 0.000000 | 2.792920 |
+| U-Net + morphology | **0.381116** | **0.193860** | 0.629373 | 0.000565 | 2.955752 |
+| U-Net + hill-climbing | 0.291573 | 0.192182 | 0.550903 | 0.135012 | 3.725664 |
+| cGAN baseline | 0.362964 | 0.191560 | 0.507818 | 0.000001 | **2.545133** |
+| cGAN + morphology | 0.367379 | 0.189786 | **0.645706** | 0.000533 | 2.646018 |
+| cGAN + hill-climbing | 0.280923 | 0.185532 | 0.558177 | 0.135018 | 3.392920 |
 
-### Output CSV Files
+### Authoritative Metric Files
 
-- U-Net baseline: `outputs/metrics_unet_full.csv`
-- U-Net + morphology: `outputs/metrics_unet_morphology_full.csv`
-- U-Net + hill-climbing: `outputs/metrics_unet_hillclimb_full.csv`
-- cGAN baseline: `outputs/metrics_cgan_full.csv`
-- cGAN + morphology: `outputs/metrics_cgan_morphology_full.csv`
-- cGAN + hill-climbing: `outputs/metrics_cgan_hillclimb_full.csv`
+- `evidence/metrics/metrics_unet_room_count_fixed.csv`
+- `evidence/metrics/metrics_unet_morphology_room_count_fixed.csv`
+- `evidence/metrics/metrics_unet_hillclimb_room_count_fixed.csv`
+- `evidence/metrics/metrics_cgan_room_count_fixed.csv`
+- `evidence/metrics/metrics_cgan_morphology_room_count_fixed.csv`
+- `evidence/metrics/metrics_cgan_hillclimb_room_count_fixed.csv`
 
 ---
 
@@ -327,37 +301,45 @@ The following table reports final performance on the 565-sample held-out test se
 
 ### U-Net vs cGAN
 
-The U-Net baseline performed better than the cGAN on mIoU and room-count error in the final held-out test evaluation. The cGAN had almost identical adjacency and compactness values to the U-Net baseline, but it did not outperform the simpler U-Net model overall.
+The U-Net baseline achieved higher semantic overlap than the cGAN baseline, with mIoU values of 0.375276 and 0.362964 respectively. The cGAN baseline achieved the lower connected-region count MAE, 2.545133 compared with 2.792920 for U-Net. Baseline adjacency F1 and compactness were similar. The two models therefore showed different strengths rather than one model being strongest on every metric.
 
 ### Morphology Refinement
 
-Morphology refinement improved both U-Net and cGAN outputs. It increased compactness substantially and improved room-count MAE while preserving semantic performance reasonably well. U-Net + morphology achieved the best overall balance, with the highest mIoU, highest adjacency F1, strong compactness and very low boundary violation.
+Morphology produced the most balanced refinement outcome. For U-Net it increased mIoU, adjacency F1 and compactness, while connected-region count MAE increased from 2.792920 to 2.955752 and BVR increased slightly from 0.000000 to 0.000565. For the cGAN it increased mIoU and compactness, while adjacency F1 decreased slightly, count MAE increased from 2.545133 to 2.646018, and BVR remained very low.
+
+U-Net with morphology achieved the highest mIoU and adjacency F1 across the six final configurations. cGAN with morphology achieved the highest compactness.
 
 ### Hill-Climbing Refinement
 
-Hill-climbing reduced room-count MAE for both models, but this came at the cost of semantic accuracy and boundary consistency. Both hill-climbing results had lower mIoU and much higher boundary violation rates. This shows that improving one spatial metric can degrade other aspects of layout quality.
+Compactness-based hill-climbing increased compactness relative to each baseline, but it substantially reduced mIoU and increased boundary violation. Under the corrected connected-region count metric, it also increased count MAE for both models. This demonstrates that optimising compactness alone can weaken other semantic and spatial properties.
 
 ### Multi-Metric Evaluation
 
-The final results show why multi-metric evaluation is needed. If only room-count error were considered, hill-climbing would appear successful. However, mIoU and boundary violation rate show that this improvement is achieved through a loss of semantic and spatial consistency.
+The final results support multi-metric evaluation. mIoU alone would favour U-Net with morphology, whereas compactness favours cGAN with morphology and connected-region count MAE favours the cGAN baseline. Reporting the metrics separately makes these trade-offs visible.
 
-### Final Selected Method
+### Final Selected Generation Route
 
-The best overall method for final generation is U-Net with morphology refinement. This method is used in the manual generation script because it provides the strongest overall balance across semantic and spatial metrics.
+U-Net with morphology is used as the final manual generation route because it provides the strongest overall balance for the project objective: highest mIoU, highest adjacency F1, substantially improved compactness and very low boundary violation. It is **not** selected because of connected-region count MAE, which is slightly worse than the U-Net baseline and higher than the cGAN baseline.
+
+---
+
+## Supplementary Condition-Sensitivity Evidence
+
+The selected U-Net checkpoint was evaluated using the same support mask with encoded counts from 3 to 7. Every requested count produced a different output, showing that the model responds to the count channel. However, the predicted connected-region count did not change monotonically with the requested condition. This supports the interpretation that the encoded count acts as a conditioning signal rather than a hard architectural room-count constraint.
+
+Repeated inference with the same input produced identical outputs under the tested setup. Runtime evidence is recorded separately in `condition_sensitivity_evidence_audit.md`.
 
 ---
 
 ## Manual Generation Script
 
-The final user-facing generation script is:
+The final generation script is:
 
 ```text
 scripts/generate_floorplan.py
 ```
 
-It generates a colourised 2D semantic floor plan mask from a boundary image and a room-count condition.
-
-### Example Command
+Example:
 
 ```bash
 python -m scripts.generate_floorplan \
@@ -370,22 +352,21 @@ python -m scripts.generate_floorplan \
   --mask_out_path outputs/generated/floorplan_6rooms.npy
 ```
 
-A helper script is also provided to export a valid boundary image from the processed dataset:
-
-```text
-scripts/export_boundary_sample.py
-```
+The argument names `--outline_path` and `--room_count` are retained for implementation compatibility. In the final dissertation they correspond to a filled binary support mask and an encoded connected-region count condition.
 
 ### Output Scope
 
-The generated output is a semantic floor plan mask, not a complete architectural drawing. It does not include detailed architectural symbols such as doors, windows, dimensions or room labels. Producing complete architectural drawings is outside the scope of this project and should be treated as future work.
+The generated output is a semantic floor-plan mask, not a complete architectural drawing. It does not include verified room instances, doors, windows, dimensions, structural calculations, utilities or construction documentation.
 
 ---
 
 ## Report Use Notes
 
-- EXP-01 to EXP-04 should be described as development and scaling experiments.
-- EXP-05 should be used as the final experiment for the main results chapter.
-- The corrected 1966-sample held-out table should be used if EXP-04 is discussed.
-- Older inconsistent results where cGAN mIoU was recorded as 0.546 and cGAN + morphology as 0.567 should not be used in the report.
-- The final project conclusion should state that boundary and room-count conditioning can generate semantic layout masks, but this conditioning alone is not sufficient to guarantee architecturally complete or fully coherent floor plans.
+- EXP-01 to EXP-04 are development history and should not replace final EXP-05 evidence.
+- EXP-05 is the source for the main dissertation results.
+- Use the common sample-level validation mIoU values 0.399831 for U-Net and 0.386000 for cGAN when describing the selected epoch-20 checkpoints.
+- Use the six `evidence/metrics/*room_count_fixed.csv` files for final held-out test results.
+- Describe the final count measure as **connected-region count MAE**, not architectural room-count accuracy.
+- Do not use the older EXP-05 count-error values around 7-9 from the earlier evaluation files.
+- Do not state that morphology or hill-climbing improved final connected-region count MAE; both increased it relative to their corresponding final baselines.
+- The final conclusion should state that the support and encoded-count conditions can guide semantic mask generation, but they do not guarantee an exact number of architectural rooms or a construction-ready layout.

@@ -1,3 +1,14 @@
+"""
+LEGACY EVALUATION SCRIPT — NOT USED FOR FINAL DISSERTATION RESULTS.
+
+This version calculates count error from class-specific connected
+components and does not match the combined non-background, non-wall
+connected-region definition used during preprocessing.
+
+Use scripts/evaluate_cgan_metrics.py for the authoritative final
+held-out cGAN evaluation.
+"""
+
 import os, csv, argparse
 import numpy as np
 import torch

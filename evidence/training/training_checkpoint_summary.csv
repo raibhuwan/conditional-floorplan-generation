@@ -1,0 +1,3 @@
+model,best_epoch,best_validation_miou,training_miou_at_best_epoch,final_training_miou,final_validation_miou
+U-Net,20,0.39983106,0.62113023,0.73684521,0.36901996
+Pix2Pix-style cGAN,20,0.38599955,0.65941864,0.74892118,0.35104533

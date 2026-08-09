@@ -10,7 +10,6 @@ from torch.utils.data import DataLoader, Subset
 from src.data.dataset import FloorplanNPZDataset
 from src.data.splits import load_split
 from src.models.unet import UNet
-from src.refinement.hillclimb import refine_semantic_mask_hillclimb
 
 
 DATA_DIR = "data/processed_npz_clean_full"
@@ -24,7 +23,7 @@ BG = 0
 WALL = 8
 
 INSTANCE_MIN_AREA = 30
-OUT_CSV = "outputs/metrics_cgan_hillclimb_room_count_fixed.csv"
+OUT_CSV = "outputs/metrics_cgan_room_count_fixed.csv"
 
 os.makedirs("outputs", exist_ok=True)
 
@@ -32,9 +31,8 @@ os.makedirs("outputs", exist_ok=True)
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate the Pix2Pix-style cGAN with hill-climbing refinement "
-            "on the held-out test set using a consistent combined-component "
-            "room-count definition."
+            "Evaluate the raw Pix2Pix-style cGAN generator on the held-out "
+            "test set using a consistent combined-component room-count definition."
         )
     )
     parser.add_argument("--data_dir", type=str, default=DATA_DIR)
@@ -42,8 +40,6 @@ def parse_args():
     parser.add_argument("--ckpt_path", type=str, default=CKPT_PATH)
     parser.add_argument("--max_count", type=int, default=MAX_COUNT)
     parser.add_argument("--out_csv", type=str, default=OUT_CSV)
-    parser.add_argument("--kernel_size", type=int, default=3)
-    parser.add_argument("--iterations", type=int, default=3)
     return parser.parse_args()
 
 
@@ -55,7 +51,7 @@ def get_device():
 
 def mean_iou(pred, gt, num_classes=NUM_CLASSES, ignore=(BG,)):
     """
-    Calculate sample-level mean IoU across semantic classes while excluding
+    Calculate sample-level mean IoU across semantic classes, excluding
     the class IDs listed in ``ignore``.
     """
     ious = []
@@ -67,14 +63,8 @@ def mean_iou(pred, gt, num_classes=NUM_CLASSES, ignore=(BG,)):
         pred_class = pred == class_id
         gt_class = gt == class_id
 
-        intersection = np.logical_and(
-            pred_class,
-            gt_class,
-        ).sum()
-        union = np.logical_or(
-            pred_class,
-            gt_class,
-        ).sum()
+        intersection = np.logical_and(pred_class, gt_class).sum()
+        union = np.logical_or(pred_class, gt_class).sum()
 
         if union == 0:
             continue
@@ -92,9 +82,9 @@ def extract_instances(
     """
     Extract class-specific connected components.
 
-    These components are used for adjacency and compactness only. They are
+    These instances are used for adjacency and compactness only. They are
     not used for room-count error because the requested room count was
-    constructed from one combined non-background, non-wall mask.
+    created from one combined non-background, non-wall mask.
     """
     instances = []
 
@@ -115,25 +105,15 @@ def extract_instances(
         )
 
         for component_id in range(1, component_count):
-            area = int(
-                stats[component_id, cv2.CC_STAT_AREA]
-            )
+            area = int(stats[component_id, cv2.CC_STAT_AREA])
 
             if area < min_area:
                 continue
 
-            x = int(
-                stats[component_id, cv2.CC_STAT_LEFT]
-            )
-            y = int(
-                stats[component_id, cv2.CC_STAT_TOP]
-            )
-            width = int(
-                stats[component_id, cv2.CC_STAT_WIDTH]
-            )
-            height = int(
-                stats[component_id, cv2.CC_STAT_HEIGHT]
-            )
+            x = int(stats[component_id, cv2.CC_STAT_LEFT])
+            y = int(stats[component_id, cv2.CC_STAT_TOP])
+            width = int(stats[component_id, cv2.CC_STAT_WIDTH])
+            height = int(stats[component_id, cv2.CC_STAT_HEIGHT])
 
             instance_mask = (
                 labels == component_id
@@ -157,12 +137,12 @@ def count_rooms_from_semantic_mask(
     wall_id=WALL,
 ):
     """
-    Count rooms from one combined binary room-region mask.
+    Count rooms using one combined binary room-region mask.
 
-    All non-background and non-wall semantic pixels are merged before
-    connected components are calculated. Semantic class boundaries do not
-    create additional rooms. This matches the room-count construction used
-    for the conditioning channel during preprocessing.
+    All non-background and non-wall pixels are merged before connected
+    components are calculated. Semantic class boundaries therefore do not
+    create extra rooms. This matches the room-count construction used for
+    the conditioning channel during preprocessing.
     """
     room_region_mask = np.logical_and(
         mask != background_id,
@@ -214,7 +194,7 @@ def compactness_of_instance(instance_mask):
 
 def adjacency_edges(instances):
     """
-    Build class-level adjacency edges from class-specific room instances.
+    Build class-level adjacency edges from class-specific instances.
     """
     edges = set()
     kernel = np.ones((3, 3), np.uint8)
@@ -235,9 +215,7 @@ def adjacency_edges(instances):
             first_index + 1,
             len(instances),
         ):
-            second_class = instances[
-                second_index
-            ]["class_id"]
+            second_class = instances[second_index]["class_id"]
 
             if first_class == second_class:
                 continue
@@ -249,11 +227,7 @@ def adjacency_edges(instances):
 
             if touching:
                 edges.add(
-                    tuple(
-                        sorted(
-                            (first_class, second_class)
-                        )
-                    )
+                    tuple(sorted((first_class, second_class)))
                 )
 
     return edges
@@ -270,9 +244,7 @@ def f1_edges(predicted_edges, ground_truth_edges):
         return 0.0
 
     true_positives = len(
-        predicted_edges.intersection(
-            ground_truth_edges
-        )
+        predicted_edges.intersection(ground_truth_edges)
     )
     false_positives = len(
         predicted_edges - ground_truth_edges
@@ -313,8 +285,8 @@ def boundary_violation_rate(
     support_mask,
 ):
     """
-    Measure the proportion of predicted non-background pixels outside the
-    binary floor-plan support mask.
+    Measure the proportion of predicted non-background pixels outside
+    the binary floor-plan support mask.
     """
     predicted_non_background = pred_mask != BG
     total_predicted_pixels = int(
@@ -426,10 +398,8 @@ def main():
     print(f"Checkpoint: {args.ckpt_path}")
     print(f"MAX_COUNT: {args.max_count}")
     print(f"Output CSV: {args.out_csv}")
-    print(f"Hill-climbing kernel size: {args.kernel_size}")
-    print(f"Hill-climbing iterations: {args.iterations}")
     print(
-        "Evaluating cGAN + hill-climbing on held-out test samples: "
+        "Evaluating raw cGAN generator on held-out test samples: "
         f"{len(test_dataset)}"
     )
     print(
@@ -491,14 +461,6 @@ def main():
             )
         )
 
-        pred_refined = refine_semantic_mask_hillclimb(
-            pred_mask,
-            num_classes=NUM_CLASSES,
-            ignore_classes=(BG,),
-            kernel_size=args.kernel_size,
-            iterations=args.iterations,
-        ).astype(np.uint8)
-
         gt_room_count = (
             count_rooms_from_semantic_mask(
                 gt_mask
@@ -506,7 +468,7 @@ def main():
         )
         predicted_room_count = (
             count_rooms_from_semantic_mask(
-                pred_refined
+                pred_mask
             )
         )
 
@@ -521,7 +483,7 @@ def main():
         )
 
         miou = mean_iou(
-            pred_refined,
+            pred_mask,
             gt_mask,
             ignore=(BG,),
         )
@@ -530,12 +492,12 @@ def main():
             gt_mask
         )
         predicted_instances = extract_instances(
-            pred_refined
+            pred_mask
         )
 
         boundary_violation = (
             boundary_violation_rate(
-                pred_refined,
+                pred_mask,
                 support_mask,
             )
         )
@@ -565,20 +527,12 @@ def main():
         ]
 
         gt_compactness = (
-            float(
-                np.mean(
-                    gt_compactness_values
-                )
-            )
+            float(np.mean(gt_compactness_values))
             if gt_compactness_values
             else 0.0
         )
         predicted_compactness = (
-            float(
-                np.mean(
-                    predicted_compactness_values
-                )
-            )
+            float(np.mean(predicted_compactness_values))
             if predicted_compactness_values
             else 0.0
         )
@@ -662,60 +616,40 @@ def main():
 
     mean_miou = float(
         np.mean(
-            [
-                row["miou_no_bg"]
-                for row in rows
-            ]
+            [row["miou_no_bg"] for row in rows]
         )
     )
     mean_adjacency_f1 = float(
         np.mean(
-            [
-                row["adj_f1"]
-                for row in rows
-            ]
+            [row["adj_f1"] for row in rows]
         )
     )
     mean_compactness = float(
         np.mean(
-            [
-                row["compact_pred"]
-                for row in rows
-            ]
+            [row["compact_pred"] for row in rows]
         )
     )
     mean_boundary_violation = float(
         np.mean(
             [
-                row[
-                    "boundary_violation_rate"
-                ]
+                row["boundary_violation_rate"]
                 for row in rows
             ]
         )
     )
     room_count_mae = float(
         np.mean(
-            [
-                row["room_count_error"]
-                for row in rows
-            ]
+            [row["room_count_error"] for row in rows]
         )
     )
     mean_expected_room_count = float(
         np.mean(
-            [
-                row["expected_room_count"]
-                for row in rows
-            ]
+            [row["expected_room_count"] for row in rows]
         )
     )
     mean_predicted_room_count = float(
         np.mean(
-            [
-                row["predicted_room_count"]
-                for row in rows
-            ]
+            [row["predicted_room_count"] for row in rows]
         )
     )
 

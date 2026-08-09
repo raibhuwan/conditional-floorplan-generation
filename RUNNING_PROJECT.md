@@ -1,20 +1,18 @@
-
-
 # Running the Project
 
-This file records the main commands used to run the conditional semantic floor plan generation project. The project generates two-dimensional semantic floor plan masks from a building outline and room-count condition. The final selected generation route is the U-Net model with optional morphology refinement.
+This file records the main commands used to run the final conditional semantic floor-plan generation project. The implemented model receives a filled binary floor-plan support mask and an encoded connected-region count, then predicts a 256 x 256 semantic floor-plan mask.
+
+Historical implementation names such as `outline` and `room_count` are retained in filenames and command-line arguments. In the final dissertation, these are described more precisely as the **binary support condition** and **encoded connected-region count condition**.
 
 ## 1. Project Assumptions
 
-Run all commands from the project root folder:
+Run all commands from the project root:
 
 ```bash
 cd conditional-floorplan-generation
 ```
 
-The final experiment uses the filtered `high_quality_architectural` subset of CubiCasa5K.
-
-Main final paths:
+Final experiment paths:
 
 ```text
 Processed full dataset: data/processed_npz_full
@@ -25,9 +23,33 @@ cGAN checkpoint: outputs/checkpoints/cgan_unet_patchgan_best.pt
 MAX_COUNT: 32
 ```
 
+Verified final evidence is stored under:
+
+```text
+evidence/training/
+evidence/metrics/
+evidence/preprocessing/
+evidence/condition_sensitivity/
+evidence/splits/
+```
+
 ## 2. Dataset Preprocessing
 
-The full high-quality CubiCasa5K subset was preprocessed into NPZ files containing the semantic mask, outline mask, room-count value and sample identifier.
+The full CubiCasa5K `high_quality_architectural` subset was preprocessed into NPZ files containing:
+
+```text
+sem
+outline
+room_count
+sample_id
+```
+
+In the final terminology:
+
+- `sem` is the nine-class semantic target mask;
+- `outline` stores the filled binary floor-plan support mask;
+- `room_count` stores the encoded connected-region count; and
+- `sample_id` preserves sample traceability.
 
 Final processed output:
 
@@ -35,11 +57,17 @@ Final processed output:
 data/processed_npz_full
 ```
 
-The full preprocessing command depends on the local CubiCasa5K folder path. Use the preprocessing command configured for the local dataset location.
+Verified preprocessing totals:
+
+```text
+Successfully processed samples: 4566
+Retained after filtering: 3761
+Excluded: 805
+```
 
 ## 3. Dataset Filtering
 
-Filter the processed samples and keep only layouts with at least three rooms:
+Retain samples with an encoded connected-region count of at least three:
 
 ```bash
 python scripts/filter_dataset.py \
@@ -49,18 +77,19 @@ python scripts/filter_dataset.py \
   --clear
 ```
 
-Final filtering result:
+The argument is named `--min_rooms` for historical compatibility, but the stored value is an encoded connected-region count rather than a manually verified architectural room count.
+
+Final exclusion distribution:
 
 ```text
-Total processed samples: 4566
-Clean samples kept: 3761
-Dropped samples: 805
-Drop reason: room_count_below_min
+Count 0: 243
+Count 1: 187
+Count 2: 375
+Total excluded: 805
+Total retained: 3761
 ```
 
-## 4. Compute Maximum Room Count
-
-Compute the maximum room count in the filtered dataset. This value is used to normalise the room-count conditioning channel.
+## 4. Compute Maximum Encoded Count
 
 ```bash
 python scripts/compute_max_count.py \
@@ -73,27 +102,28 @@ Final value:
 MAX_COUNT = 32
 ```
 
-## 5. Create Train / Validation / Test Split
+This value is used to normalise the count-conditioning channel.
 
-Create the fixed split used in the final experiment:
+## 5. Create Train / Validation / Test Split
 
 ```bash
 python -m scripts.create_split \
   --data_dir data/processed_npz_clean_full \
-  --out outputs/splits/split_seed42_full.json
+  --out outputs/splits/split_seed42_full.json \
+  --seed 42
 ```
 
 Final split:
 
 ```text
 Total: 3761
-Train: 2632
+Training: 2632
 Validation: 564
 Test: 565
 Seed: 42
 ```
 
-The training set is used for model learning, the validation set is used for checkpoint selection and tuning, and the held-out test set is used only for final evaluation.
+Training data are used for parameter learning, validation data for checkpoint selection, and the test set only for final held-out evaluation.
 
 ## 6. Train the U-Net Baseline
 
@@ -109,13 +139,18 @@ python -m train_unet \
   --checkpoint_name unet_base16_best.pt
 ```
 
-Final U-Net result:
+Final selected checkpoint evidence:
 
 ```text
-Best validation IoU: 0.4706
-Best epoch: 20
-Checkpoint: outputs/checkpoints/unet_base16_best.pt
+Selected epoch: 20
+Common sample-level validation mIoU: 0.399831
+Training mIoU at epoch 20: 0.621130
+Final training mIoU: 0.736845
+Final validation mIoU: 0.369020
+Approximate total training time: 54.0 minutes
 ```
+
+The training history also contains an older validation aggregation that produced a higher logged value around 0.4706 at the selected checkpoint. The final dissertation comparison uses the common sample-level validation procedure stored in `evidence/training/` so that U-Net and cGAN are compared consistently.
 
 ## 7. Train the Pix2Pix-Style cGAN
 
@@ -134,17 +169,20 @@ python -m train_cgan \
   --checkpoint_name cgan_unet_patchgan_best.pt
 ```
 
-Final cGAN result:
+Final selected checkpoint evidence:
 
 ```text
-Best validation IoU: 0.3860
-Best epoch: 20
-Checkpoint: outputs/checkpoints/cgan_unet_patchgan_best.pt
+Selected epoch: 20
+Common sample-level validation mIoU: 0.386000
+Training mIoU at epoch 20: 0.659419
+Final training mIoU: 0.748921
+Final validation mIoU: 0.351045
+Approximate total training time: 101.7 minutes
 ```
 
-## 8. Evaluate Final Methods
+## 8. Evaluate the Final Six Configurations
 
-All final evaluations are run on the held-out test set of 565 unseen samples.
+All final evaluations use the same 565 held-out test samples. The output filenames below use the historical `room_count_fixed` label because those files correspond directly to the authoritative evidence copied into `evidence/metrics/`.
 
 ### 8.1 U-Net Baseline
 
@@ -154,18 +192,18 @@ python -m scripts.evaluate_metrics \
   --split_path outputs/splits/split_seed42_full.json \
   --ckpt_path outputs/checkpoints/unet_base16_best.pt \
   --max_count 32 \
-  --out_csv outputs/metrics_unet_full.csv
+  --out_csv outputs/metrics_unet_room_count_fixed.csv
 ```
 
 ### 8.2 cGAN Baseline
 
 ```bash
-python -m scripts.evaluate_cgan \
+python -m scripts.evaluate_cgan_metrics \
   --data_dir data/processed_npz_clean_full \
   --split_path outputs/splits/split_seed42_full.json \
   --ckpt_path outputs/checkpoints/cgan_unet_patchgan_best.pt \
   --max_count 32 \
-  --out_csv outputs/metrics_cgan_full.csv
+  --out_csv outputs/metrics_cgan_room_count_fixed.csv
 ```
 
 ### 8.3 U-Net + Morphology
@@ -176,7 +214,7 @@ python -m scripts.evaluate_unet_morphology \
   --split_path outputs/splits/split_seed42_full.json \
   --ckpt_path outputs/checkpoints/unet_base16_best.pt \
   --max_count 32 \
-  --out_csv outputs/metrics_unet_morphology_full.csv \
+  --out_csv outputs/metrics_unet_morphology_room_count_fixed.csv \
   --kernel_size 3 \
   --min_area 30
 ```
@@ -189,7 +227,7 @@ python -m scripts.evaluate_cgan_morphology \
   --split_path outputs/splits/split_seed42_full.json \
   --ckpt_path outputs/checkpoints/cgan_unet_patchgan_best.pt \
   --max_count 32 \
-  --out_csv outputs/metrics_cgan_morphology_full.csv \
+  --out_csv outputs/metrics_cgan_morphology_room_count_fixed.csv \
   --kernel_size 3 \
   --min_area 30
 ```
@@ -202,7 +240,7 @@ python -m scripts.evaluate_unet_hillclimb \
   --split_path outputs/splits/split_seed42_full.json \
   --ckpt_path outputs/checkpoints/unet_base16_best.pt \
   --max_count 32 \
-  --out_csv outputs/metrics_unet_hillclimb_full.csv \
+  --out_csv outputs/metrics_unet_hillclimb_room_count_fixed.csv \
   --kernel_size 3 \
   --iterations 3
 ```
@@ -215,27 +253,27 @@ python -m scripts.evaluate_cgan_hillclimb \
   --split_path outputs/splits/split_seed42_full.json \
   --ckpt_path outputs/checkpoints/cgan_unet_patchgan_best.pt \
   --max_count 32 \
-  --out_csv outputs/metrics_cgan_hillclimb_full.csv \
+  --out_csv outputs/metrics_cgan_hillclimb_room_count_fixed.csv \
   --kernel_size 3 \
   --iterations 3
 ```
 
 ## 9. Final Held-Out Test Results
 
-| Method | mIoU | Adj F1 | Compactness | BVR | RC-MAE |
+| Method | mIoU | Adj F1 | Compactness | BVR | Connected-region count MAE |
 |---|---:|---:|---:|---:|---:|
-| U-Net baseline | 0.375 | 0.191 | 0.508 | 0.000 | 8.287 |
-| U-Net + morphology | 0.381 | 0.194 | 0.629 | 0.001 | 7.156 |
-| U-Net + hill-climbing | 0.292 | 0.192 | 0.551 | 0.135 | 4.361 |
-| cGAN baseline | 0.363 | 0.192 | 0.508 | 0.000 | 9.377 |
-| cGAN + morphology | 0.367 | 0.190 | 0.646 | 0.001 | 8.550 |
-| cGAN + hill-climbing | 0.281 | 0.186 | 0.558 | 0.135 | 5.513 |
+| U-Net baseline | 0.375276 | 0.190705 | 0.507777 | 0.000000 | 2.792920 |
+| U-Net + morphology | **0.381116** | **0.193860** | 0.629373 | 0.000565 | 2.955752 |
+| U-Net + hill-climbing | 0.291573 | 0.192182 | 0.550903 | 0.135012 | 3.725664 |
+| cGAN baseline | 0.362964 | 0.191560 | 0.507818 | 0.000001 | **2.545133** |
+| cGAN + morphology | 0.367379 | 0.189786 | **0.645706** | 0.000533 | 2.646018 |
+| cGAN + hill-climbing | 0.280923 | 0.185532 | 0.558177 | 0.135018 | 3.392920 |
 
-The best overall method is U-Net with morphology refinement because it gives the strongest balance across semantic accuracy, adjacency similarity, compactness and boundary consistency.
+The final selected generation route is U-Net with morphology because it achieved the highest mIoU and adjacency F1, substantially improved compactness relative to the U-Net baseline, and kept boundary violation very low. Its connected-region count MAE is slightly worse than the U-Net baseline, so the selection is based on the overall metric balance rather than count agreement alone.
 
-## 10. Export a Boundary Image for Manual Generation
+## 10. Export a Support Image for Manual Generation
 
-A boundary image can be exported from an existing test sample using:
+A support image can be exported from an existing test sample using:
 
 ```bash
 python -m scripts.export_boundary_sample \
@@ -247,15 +285,9 @@ python -m scripts.export_boundary_sample \
   --out_path inputs/boundary.png
 ```
 
-This creates:
+The historical script and output filename use the word `boundary`, but the exported image used by the final model is the filled binary floor-plan support condition.
 
-```text
-inputs/boundary.png
-```
-
-## 11. Generate a Semantic Floor Plan from Boundary + Room Count
-
-Use the final selected model route, U-Net with morphology refinement:
+## 11. Generate a Semantic Floor Plan
 
 ```bash
 python -m scripts.generate_floorplan \
@@ -268,17 +300,22 @@ python -m scripts.generate_floorplan \
   --mask_out_path outputs/generated/floorplan_6rooms.npy
 ```
 
-Output:
+The command-line argument `--room_count` supplies the encoded connected-region count condition. It should not be interpreted as guaranteed architectural room-count control.
+
+The manual generation script clips the saved output to the supplied support mask. This differs from the final evaluation pipeline, where predictions remain unclipped so that boundary violation can be measured.
+
+## 12. Supplementary Condition-Sensitivity Test
+
+The evidence script under `scripts/evidence/` tests the same support condition with encoded counts from 3 to 7, repeated inference and local runtime. Verified results are stored under:
 
 ```text
-outputs/generated/floorplan_6rooms.png
-outputs/generated/floorplan_6rooms.npy
+evidence/condition_sensitivity/
 ```
 
-The PNG file is a colourised semantic floor plan mask. The NPY file stores the raw class-id mask.
+The test shows that changing the encoded count changes the semantic prediction, but the predicted connected-region count is not monotonic and does not reliably equal the requested value.
 
-## 12. Output Scope
+## 13. Output Scope
 
-The project generates semantic floor plan masks rather than complete architectural drawings. The output does not include detailed architectural symbols such as doors, windows, dimensions or room labels.
+The system generates semantic floor-plan masks rather than complete architectural drawings. Outputs do not include verified room instances, doors, windows, room labels, dimensions, furniture, structural calculations, building-service information or CAD-ready geometry.
 
-Producing a clean architectural drawing from the generated semantic mask would require additional rendering, vectorisation or symbol-generation stages, which are outside the scope of this project.
+For final dissertation numbers, use the files under `evidence/` rather than older metric CSVs retained in `outputs/` for development history.
