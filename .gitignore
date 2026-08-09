@@ -43,5 +43,5 @@ outputs.zip
 preprocessing_evidence_bundle.zip
 
 # ---- Local verification notes ----
-condition_sensitivity_evidence_audit.md
-preprocessing_evidence_audit.md
+# condition_sensitivity_evidence_audit.md
+# preprocessing_evidence_audit.md
