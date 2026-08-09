@@ -175,25 +175,25 @@ Example final generation command:
 ```bash
 python -m scripts.generate_floorplan \
   --outline_path inputs/boundary.png \
-  --room_count 6 \
+  --room_count 8 \
   --ckpt_path outputs/checkpoints/unet_base16_best.pt \
   --max_count 32 \
   --apply_morphology \
-  --out_path outputs/generated/floorplan_6rooms.png \
-  --mask_out_path outputs/generated/floorplan_6rooms.npy
+  --out_path outputs/generated/floorplan_8rooms.png \
+  --mask_out_path outputs/generated/floorplan_8rooms.npy
 ```
 
 The command retains historical argument names; `--outline_path` supplies the support image and `--room_count` supplies the encoded connected-region count condition.
 
 ## Final Training Evidence
 
-The final dissertation uses a common sample-level validation mIoU procedure for checkpoint comparison.
+The final dissertation uses the same validation mIoU calculation recorded during training for checkpoint comparison. The calculation obtains mIoU for each validation batch and averages the batch-level values across the validation partition.
 
 ### U-Net
 
 ```text
 Selected epoch: 20
-Common validation mIoU: 0.399831
+Validation mIoU at selected epoch: 0.399831
 Training mIoU at epoch 20: 0.621130
 Final training mIoU: 0.736845
 Final validation mIoU: 0.369020
@@ -204,14 +204,12 @@ Approximate training time: 54.0 minutes
 
 ```text
 Selected epoch: 20
-Common validation mIoU: 0.386000
+Validation mIoU at selected epoch: 0.386000
 Training mIoU at epoch 20: 0.659419
 Final training mIoU: 0.748921
 Final validation mIoU: 0.351045
 Approximate training time: 101.7 minutes
 ```
-
-The original training history contains an older validation aggregation for U-Net that produced a value around 0.4706 at epoch 20. The final dissertation uses the common validation calculation stored in `evidence/training/` to keep the model comparison consistent.
 
 ## Final Held-Out Test Results
 

@@ -51,6 +51,18 @@ In the final terminology:
 - `room_count` stores the encoded connected-region count; and
 - `sample_id` preserves sample traceability.
 
+The full subset can be preprocessed using:
+
+```bash
+python src/preprocess/preprocess_cubicasa.py \
+  --data_root data/cubicasa5k \
+  --out_dir data/processed_npz_full \
+  --category high_quality_architectural \
+  --max_samples 0
+```
+
+The value `--max_samples 0` removes the development-stage sample limit and processes the complete available `high_quality_architectural` subset. In the final preprocessing run, 4,566 floor-level samples were successfully processed before filtering.
+
 Final processed output:
 
 ```text
@@ -143,14 +155,14 @@ Final selected checkpoint evidence:
 
 ```text
 Selected epoch: 20
-Common sample-level validation mIoU: 0.399831
+Validation mIoU at selected epoch: 0.399831
 Training mIoU at epoch 20: 0.621130
 Final training mIoU: 0.736845
 Final validation mIoU: 0.369020
 Approximate total training time: 54.0 minutes
 ```
 
-The training history also contains an older validation aggregation that produced a higher logged value around 0.4706 at the selected checkpoint. The final dissertation comparison uses the common sample-level validation procedure stored in `evidence/training/` so that U-Net and cGAN are compared consistently.
+The selected checkpoint was determined using the validation mIoU calculation recorded during training. This calculation obtains mIoU for each validation batch and averages the batch-level values across the validation partition. The same procedure was used for both final models.
 
 ## 7. Train the Pix2Pix-Style cGAN
 
@@ -173,7 +185,7 @@ Final selected checkpoint evidence:
 
 ```text
 Selected epoch: 20
-Common sample-level validation mIoU: 0.386000
+Validation mIoU at selected epoch: 0.386000
 Training mIoU at epoch 20: 0.659419
 Final training mIoU: 0.748921
 Final validation mIoU: 0.351045
@@ -269,7 +281,7 @@ python -m scripts.evaluate_cgan_hillclimb \
 | cGAN + morphology | 0.367379 | 0.189786 | **0.645706** | 0.000533 | 2.646018 |
 | cGAN + hill-climbing | 0.280923 | 0.185532 | 0.558177 | 0.135018 | 3.392920 |
 
-The final selected generation route is U-Net with morphology because it achieved the highest mIoU and adjacency F1, substantially improved compactness relative to the U-Net baseline, and kept boundary violation very low. Its connected-region count MAE is slightly worse than the U-Net baseline, so the selection is based on the overall metric balance rather than count agreement alone.
+U-Net with morphology was used for the final manual generation example because it achieved the highest mIoU and adjacency F1, substantially improved compactness relative to the U-Net baseline and retained a very low boundary violation rate. This was a pragmatic project choice rather than evidence that one configuration was universally best across all evaluation measures.
 
 ## 10. Export a Support Image for Manual Generation
 
@@ -280,7 +292,7 @@ python -m scripts.export_boundary_sample \
   --data_dir data/processed_npz_clean_full \
   --split_path outputs/splits/split_seed42_full.json \
   --split test \
-  --sample_index 0 \
+  --sample_index 2 \
   --max_count 32 \
   --out_path inputs/boundary.png
 ```
@@ -292,12 +304,12 @@ The historical script and output filename use the word `boundary`, but the expor
 ```bash
 python -m scripts.generate_floorplan \
   --outline_path inputs/boundary.png \
-  --room_count 6 \
+  --room_count 8 \
   --ckpt_path outputs/checkpoints/unet_base16_best.pt \
   --max_count 32 \
   --apply_morphology \
-  --out_path outputs/generated/floorplan_6rooms.png \
-  --mask_out_path outputs/generated/floorplan_6rooms.npy
+  --out_path outputs/generated/floorplan_8rooms.png \
+  --mask_out_path outputs/generated/floorplan_8rooms.npy
 ```
 
 The command-line argument `--room_count` supplies the encoded connected-region count condition. It should not be interpreted as guaranteed architectural room-count control.

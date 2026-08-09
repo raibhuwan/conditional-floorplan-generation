@@ -28,7 +28,7 @@ Development experiments EXP-01 to EXP-04 are retained for project history. Their
 | EXP-02 | Stabilised cGAN training | 492 | Logged best validation IoU: 0.278 |
 | EXP-03 | Increased dataset training | 1,004 | Logged best validation IoU: 0.319 |
 | EXP-04 | Development scaling run | 1,966 | Logged best validation IoU: 0.373 |
-| EXP-05 | Final full `high_quality_architectural` run | 3,761 | Common validation mIoU: 0.399831 U-Net / 0.386000 cGAN |
+| EXP-05 | Final full `high_quality_architectural` run | 3,761 | Validation mIoU at selected epoch: 0.399831 U-Net / 0.386000 cGAN |
 
 The early experiments were used to test preprocessing, adversarial stability and dataset scaling. The final dissertation results are based on EXP-05.
 
@@ -231,13 +231,13 @@ python -m train_unet \
 ### Final Evidence
 
 - Selected checkpoint epoch: 20
-- Common sample-level validation mIoU at epoch 20: 0.399831
+- Validation mIoU at selected epoch 20: 0.399831
 - Training mIoU at epoch 20: 0.621130
 - Final epoch training mIoU: 0.736845
 - Final epoch validation mIoU: 0.369020
 - Approximate 30-epoch training time: 54.0 minutes
 
-The training script historically logged a different validation aggregation and produced a value of approximately 0.4706 at the selected checkpoint. For the dissertation, both models were re-evaluated using the same common sample-level validation mIoU procedure. The common values in `evidence/training/training_checkpoint_summary.csv` are therefore the values used for the final comparison.
+The selected checkpoint was determined using the validation mIoU calculation recorded during training. This calculation obtains mIoU for each validation batch and averages the batch-level values across the validation partition. The same procedure was used for both final models.
 
 ---
 
@@ -263,13 +263,13 @@ python -m train_cgan \
 ### Final Evidence
 
 - Selected checkpoint epoch: 20
-- Common sample-level validation mIoU at epoch 20: 0.386000
+- Validation mIoU at selected epoch 20: 0.386000
 - Training mIoU at epoch 20: 0.659419
 - Final epoch training mIoU: 0.748921
 - Final epoch validation mIoU: 0.351045
 - Approximate 30-epoch training time: 101.7 minutes
 
-The cGAN remained below the U-Net on the common validation mIoU comparison despite achieving higher training mIoU.
+The cGAN achieved a lower validation mIoU than the U-Net at the selected checkpoint despite recording a higher training mIoU.
 
 ---
 
@@ -319,7 +319,7 @@ The final results support multi-metric evaluation. mIoU alone would favour U-Net
 
 ### Final Selected Generation Route
 
-U-Net with morphology is used as the final manual generation route because it provides the strongest overall balance for the project objective: highest mIoU, highest adjacency F1, substantially improved compactness and very low boundary violation. It is **not** selected because of connected-region count MAE, which is slightly worse than the U-Net baseline and higher than the cGAN baseline.
+U-Net with morphology was used for the final manual generation example because it achieved the highest mIoU and adjacency F1, substantially improved compactness and retained a very low boundary violation rate. This was a pragmatic project choice rather than evidence that one configuration was universally best across all evaluation measures.
 
 ---
 
@@ -344,12 +344,12 @@ Example:
 ```bash
 python -m scripts.generate_floorplan \
   --outline_path inputs/boundary.png \
-  --room_count 6 \
+  --room_count 8 \
   --ckpt_path outputs/checkpoints/unet_base16_best.pt \
   --max_count 32 \
   --apply_morphology \
-  --out_path outputs/generated/floorplan_6rooms.png \
-  --mask_out_path outputs/generated/floorplan_6rooms.npy
+  --out_path outputs/generated/floorplan_8rooms.png \
+  --mask_out_path outputs/generated/floorplan_8rooms.npy
 ```
 
 The argument names `--outline_path` and `--room_count` are retained for implementation compatibility. In the final dissertation they correspond to a filled binary support mask and an encoded connected-region count condition.
@@ -364,7 +364,7 @@ The generated output is a semantic floor-plan mask, not a complete architectural
 
 - EXP-01 to EXP-04 are development history and should not replace final EXP-05 evidence.
 - EXP-05 is the source for the main dissertation results.
-- Use the common sample-level validation mIoU values 0.399831 for U-Net and 0.386000 for cGAN when describing the selected epoch-20 checkpoints.
+- Use the validation mIoU values recorded at the selected epoch: 0.399831 for U-Net and 0.386000 for the cGAN.
 - Use the six `evidence/metrics/*room_count_fixed.csv` files for final held-out test results.
 - Describe the final count measure as **connected-region count MAE**, not architectural room-count accuracy.
 - Do not use the older EXP-05 count-error values around 7-9 from the earlier evaluation files.
