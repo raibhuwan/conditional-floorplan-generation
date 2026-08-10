@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from src.data.dataset import FloorplanNPZDataset
 from src.models.unet import UNet
 
-from scripts.refine_utils import extract_rect_instances, paint_rects_safe
+from scripts.archive.legacy_refinement.refine_utils import extract_rect_instances, paint_rects_safe
 
 # -----------------------------
 # Config
