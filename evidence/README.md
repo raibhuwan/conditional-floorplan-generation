@@ -74,6 +74,15 @@ The filenames retain the historical term `room_count_fixed` for traceability. Th
 
 Class-specific connected components with a minimum area of 30 pixels are used separately for adjacency and compactness evaluation.
 
+### Bootstrap Uncertainty Analysis
+
+`evidence/metrics/bootstrap_uncertainty_summary.csv` records the supplementary paired 95% building-cluster bootstrap intervals reported in Chapter 5. The analysis uses 20,000 resamples across the 548 buildings represented by the 565 held-out test floors.
+
+The analysis is reproduced using:
+
+```text
+scripts/evidence/bootstrap_uncertainty.py
+
 ## Final Result Interpretation
 
 - U-Net baseline has higher mIoU than the cGAN baseline.
@@ -105,7 +114,7 @@ The outputs changed when the encoded count changed, but the resulting connected-
 
 ## Supporting Scripts
 
-Scripts used to construct supplementary evidence are stored in:
+Scripts used to construct supplementary evidence, including the building-cluster bootstrap uncertainty analysis, are stored in:
 
 ```text
 scripts/evidence/
