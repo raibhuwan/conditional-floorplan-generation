@@ -42,9 +42,14 @@ Detailed execution instructions are available in:
 
 `RUNNING_PROJECT.md`
 
-The supplementary bootstrap analysis can be reproduced using:
+The supplementary analysis can be reproduced using:
 
 python scripts/evidence/bootstrap_uncertainty.py
+python scripts/evidence/evaluate_unseen_buildings.py
+
+The strictly unseen-building analysis uses a subset of the existing floor-level test
+partition. It does not convert the original dataset split into a building-grouped split
+and does not involve model retraining.
 
 ## Terminology
 

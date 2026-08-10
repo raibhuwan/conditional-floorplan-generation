@@ -82,6 +82,31 @@ The analysis is reproduced using:
 
 ```text
 scripts/evidence/bootstrap_uncertainty.py
+```
+
+### Strictly Unseen-Building Generalisation Check
+
+A supplementary generalisation analysis was performed using the existing held-out
+test partition. Test floors were restricted to building identifiers that were absent
+from both the training and validation partitions.
+
+Of the 565 held-out test floors, 418 floors from 404 buildings met this criterion,
+representing 73.98% of the test partition.
+
+The analysis re-aggregated the existing per-sample evaluation results and did not
+retrain the models or change checkpoint selection. The principal model and refinement
+trade-offs remained consistent on this strictly unseen-building subset. This analysis
+does not replace a prospectively building-grouped train, validation and test split.
+
+Reproduction script:
+
+`python scripts/evidence/evaluate_unseen_buildings.py`
+
+Evidence files:
+
+- `metrics/unseen_building_test_samples.csv`
+- `metrics/unseen_building_metrics_summary.csv`
+- `metrics/unseen_building_bootstrap_summary.csv`
 
 ## Final Result Interpretation
 
