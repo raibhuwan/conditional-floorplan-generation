@@ -213,7 +213,7 @@ Approximate training time: 101.7 minutes
 
 ## Final Held-Out Test Results
 
-Final evaluation was performed on the same 565 unseen test samples for all six configurations.
+Final evaluation was performed on the same 565 held-out test samples for all six configurations.
 
 | Method | mIoU | Adj F1 | Compactness | BVR | Connected-region count MAE |
 |---|---:|---:|---:|---:|---:|
