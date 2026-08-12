@@ -37,6 +37,7 @@ DEFAULT_LAMBDA_GAN = 0.05
 DEFAULT_SEED = 42
 
 
+# Parse command-line options used to configure cGAN training.
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Train the Pix2Pix-style cGAN for semantic floor plan generation."
@@ -116,12 +117,14 @@ def parse_args():
     return parser.parse_args()
 
 
+# Set Python, NumPy and PyTorch random seeds for reproducible execution.
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
 
 
+# Select Apple MPS acceleration when available, otherwise use the CPU.
 def get_device():
     if torch.backends.mps.is_available():
         return torch.device("mps")
@@ -132,6 +135,9 @@ def to_one_hot(mask, num_classes):
     """
     Convert a class-ID mask [B, H, W] to one-hot format [B, C, H, W].
     """
+
+    # Move the class dimension before the spatial dimensions so the result
+    # can be concatenated with the conditional channels for the discriminator.
     return (
         F.one_hot(mask, num_classes=num_classes)
         .permute(0, 3, 1, 2)
@@ -145,6 +151,7 @@ def mean_iou(pred, target, num_classes=NUM_CLASSES, ignore_index=0):
     """
     ious = []
 
+    # Calculate IoU independently for each semantic class.
     for class_id in range(num_classes):
         if ignore_index is not None and class_id == ignore_index:
             continue
@@ -155,6 +162,7 @@ def mean_iou(pred, target, num_classes=NUM_CLASSES, ignore_index=0):
         intersection = (pred_class & target_class).sum().item()
         union = (pred_class | target_class).sum().item()
 
+        # Skip classes that are absent from both prediction and target.
         if union == 0:
             continue
 
@@ -223,24 +231,32 @@ def append_log_row(
         )
 
 
+# Run the complete cGAN training and validation workflow.
 def main():
     args = parse_args()
+
+    # Apply the selected random seed before model and data-loader setup.
     set_seed(args.seed)
 
     device = get_device()
     print("Device:", device)
 
+    # Load the processed samples used to construct conditional inputs and targets.
     dataset = FloorplanNPZDataset(
         args.data_dir,
         max_count=args.max_count,
     )
 
+    # Load the fixed train, validation and test partition.
     split = load_split(args.split_path)
 
+    # Use training samples for parameter learning and validation samples
+    # for checkpoint selection. The test partition remains separate.
     train_dataset = Subset(dataset, split["train"])
     validation_dataset = Subset(dataset, split["val"])
     test_count = len(split["test"])
 
+    # Shuffle the training batches while keeping validation order fixed.
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -271,18 +287,24 @@ def main():
         f"test={test_count}"
     )
 
+    # Use the same U-Net structure as the supervised model to generate
+    # nine-class semantic predictions from the two-channel condition.
     generator = UNet(
         in_channels=2,
         out_channels=NUM_CLASSES,
         base=16,
     ).to(device)
 
+    # Create the PatchGAN discriminator that evaluates the condition
+    # together with a nine-channel semantic representation.
     discriminator = PatchDiscriminator(
         condition_channels=2,
         mask_channels=NUM_CLASSES,
         base=32,
     ).to(device)
 
+    # Use separate Adam optimisers because generator and discriminator
+    # parameters are updated independently during adversarial training.
     generator_optimizer = torch.optim.Adam(
         generator.parameters(),
         lr=args.lr_g,
@@ -294,15 +316,19 @@ def main():
         betas=(0.5, 0.999),
     )
 
+    # Cross-entropy measures semantic prediction error, while binary
+    # cross-entropy provides the adversarial real/fake training objective.
     cross_entropy_loss = nn.CrossEntropyLoss()
     adversarial_loss = nn.BCEWithLogitsLoss()
 
+    # Track the strongest validation mIoU for checkpoint selection.
     best_validation_iou = -1.0
     initialise_log(args.log_csv)
 
     for epoch in range(1, args.epochs + 1):
         epoch_start_time = time.time()
 
+        # Enable training behaviour for both networks.
         generator.train()
         discriminator.train()
 
@@ -320,6 +346,9 @@ def main():
             # -------------------------
             # 1. Train discriminator
             # -------------------------
+
+            # Generate predictions without retaining generator gradients because
+            # this stage updates only the discriminator.
             with torch.no_grad():
                 detached_fake_logits = generator(inputs)
                 detached_fake_probabilities = torch.softmax(
@@ -327,11 +356,13 @@ def main():
                     dim=1,
                 )
 
+            # Convert ground-truth class IDs into nine one-hot semantic channels.
             real_one_hot = to_one_hot(
                 targets,
                 NUM_CLASSES,
             ).to(device)
 
+            # Evaluate real condition-target pairs and generated condition-output pairs.
             discriminator_real_logits = discriminator(
                 inputs,
                 real_one_hot,
@@ -341,6 +372,8 @@ def main():
                 detached_fake_probabilities.detach(),
             )
 
+            # Use one-sided label smoothing for real pairs and zero targets for
+            # generated pairs during discriminator training.
             real_targets = torch.full_like(
                 discriminator_real_logits,
                 0.9,
@@ -349,6 +382,7 @@ def main():
                 discriminator_fake_logits
             )
 
+            # Calculate discriminator loss for both real and generated pairs.
             discriminator_real_loss = adversarial_loss(
                 discriminator_real_logits,
                 real_targets,
@@ -362,6 +396,7 @@ def main():
                 + discriminator_fake_loss
             )
 
+            # Update discriminator parameters only.
             discriminator_optimizer.zero_grad()
             discriminator_loss.backward()
             discriminator_optimizer.step()
@@ -369,37 +404,49 @@ def main():
             # -------------------------
             # 2. Train generator
             # -------------------------
+
+            # Generate a new prediction with gradients enabled for generator training.
             fake_logits = generator(inputs)
+
+            # Convert generator logits into semantic probabilities before
+            # supplying the generated layout to the discriminator.
             fake_probabilities = torch.softmax(
                 fake_logits,
                 dim=1,
             )
 
+            # Ask the discriminator to evaluate the generated condition-layout pair.
             discriminator_fake_for_generator = discriminator(
                 inputs,
                 fake_probabilities,
             )
 
+            # Encourage generated pairs to be classified as real by the discriminator.
             generator_adversarial_loss = adversarial_loss(
                 discriminator_fake_for_generator,
                 torch.ones_like(
                     discriminator_fake_for_generator
                 ),
             )
+
+            # Measure pixel-level semantic disagreement with the ground-truth mask.
             generator_cross_entropy_loss = cross_entropy_loss(
                 fake_logits,
                 targets,
             )
 
+            # Combine the weighted supervised and adversarial objectives.
             generator_loss = (
                 args.lambda_ce * generator_cross_entropy_loss
                 + args.lambda_gan * generator_adversarial_loss
             )
 
+            # Back-propagate the combined objective through the generator.
             generator_optimizer.zero_grad()
             generator_loss.backward()
             generator_optimizer.step()
 
+            # Convert logits to class predictions for training-metric monitoring.
             with torch.no_grad():
                 predictions = torch.argmax(
                     fake_logits,
@@ -413,6 +460,7 @@ def main():
                     ignore_index=0,
                 )
 
+            # Accumulate batch-level losses and mIoU for epoch-level reporting.
             total_generator_loss += generator_loss.item()
             total_discriminator_loss += discriminator_loss.item()
             total_cross_entropy += generator_cross_entropy_loss.item()
@@ -420,6 +468,7 @@ def main():
             total_train_iou += batch_iou
             train_steps += 1
 
+        # Average the recorded training values over all batches in the epoch.
         train_generator_loss = (
             total_generator_loss / max(1, train_steps)
         )
@@ -439,23 +488,28 @@ def main():
         # -------------------------
         # Validation
         # -------------------------
+
+        # Only the generator is required for semantic validation.
         generator.eval()
 
         total_validation_iou = 0.0
         total_validation_cross_entropy = 0.0
         validation_steps = 0
 
+        # Validation does not update generator or discriminator parameters.
         with torch.no_grad():
             for inputs, targets in validation_loader:
                 inputs = inputs.to(device)
                 targets = targets.to(device)
 
+                # Generate validation predictions from the fixed condition.
                 logits = generator(inputs)
                 predictions = torch.argmax(
                     logits,
                     dim=1,
                 )
 
+                # Record supervised validation loss for monitoring.
                 total_validation_cross_entropy += (
                     cross_entropy_loss(
                         logits,
@@ -463,6 +517,8 @@ def main():
                     ).item()
                 )
 
+                # Calculate validation mIoU using the same class handling
+                # applied during training monitoring.
                 total_validation_iou += mean_iou(
                     predictions,
                     targets,
@@ -472,6 +528,7 @@ def main():
 
                 validation_steps += 1
 
+        # Average validation values across all validation batches.
         validation_iou = (
             total_validation_iou / max(1, validation_steps)
         )
@@ -494,6 +551,8 @@ def main():
             f"val IoU={validation_iou:.3f}"
         )
 
+        # Retain a checkpoint only when validation mIoU improves.
+        # The held-out test set is not used for checkpoint selection.
         checkpoint_saved = (
             validation_iou > best_validation_iou
         )
@@ -506,6 +565,8 @@ def main():
                 args.checkpoint_name,
             )
 
+            # Save both network states and the configuration needed to
+            # identify the selected cGAN training setup.
             torch.save(
                 {
                     "epoch": epoch,
@@ -536,6 +597,7 @@ def main():
                 f"val IoU={best_validation_iou:.3f}"
             )
 
+        # Record the current epoch for later training-history analysis.
         append_log_row(
             args.log_csv,
             epoch,

@@ -20,11 +20,13 @@ SUMMARY_OUTPUT = Path(
 )
 
 
+# Validate that a training log contains the expected columns and complete epoch sequence.
 def validate_log(
     dataframe: pd.DataFrame,
     required_columns: set[str],
     model_name: str,
 ) -> None:
+    # Check that all values required for plotting and checkpoint analysis are present.
     missing_columns = required_columns.difference(dataframe.columns)
 
     if missing_columns:
@@ -33,6 +35,7 @@ def validate_log(
             f"{sorted(missing_columns)}"
         )
 
+    # The retained experiments were trained for 30 epochs.
     if len(dataframe) != 30:
         raise ValueError(
             f"{model_name} log contains {len(dataframe)} rows; "
@@ -41,6 +44,8 @@ def validate_log(
 
     expected_epochs = list(range(1, 31))
 
+    # Require the complete ordered epoch sequence to avoid plotting
+    # incomplete or incorrectly ordered training histories.
     if dataframe["epoch"].tolist() != expected_epochs:
         raise ValueError(
             f"{model_name} log does not contain epochs 1 to 30 "
@@ -48,7 +53,9 @@ def validate_log(
         )
 
 
+# Generate the training/validation mIoU figure and checkpoint summary.
 def main() -> None:
+    # Require both retained training logs before attempting comparison.
     if not UNET_LOG.exists():
         raise FileNotFoundError(
             f"U-Net log was not found: {UNET_LOG}"
@@ -59,9 +66,11 @@ def main() -> None:
             f"cGAN log was not found: {CGAN_LOG}"
         )
 
+    # Load the recorded epoch-level histories for both model configurations.
     unet = pd.read_csv(UNET_LOG)
     cgan = pd.read_csv(CGAN_LOG)
 
+    # Validate the U-Net log before using it for plotting or checkpoint analysis.
     validate_log(
         unet,
         {
@@ -73,6 +82,7 @@ def main() -> None:
         "U-Net",
     )
 
+    # Apply the same validation checks to the cGAN training history.
     validate_log(
         cgan,
         {
@@ -84,12 +94,15 @@ def main() -> None:
         "cGAN",
     )
 
+    # Locate the epoch with the highest logged validation mIoU for each model.
     unet_best_index = unet["validation_miou"].idxmax()
     cgan_best_index = cgan["validation_miou"].idxmax()
 
     unet_best = unet.loc[unet_best_index]
     cgan_best = cgan.loc[cgan_best_index]
 
+    # Summarise the selected validation result together with the corresponding
+    # training mIoU and final-epoch values for each model.
     summary = pd.DataFrame(
         [
             {
@@ -127,13 +140,16 @@ def main() -> None:
         ]
     )
 
+    # Save the checkpoint summary as a separate CSV for traceability.
     SUMMARY_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     summary.to_csv(SUMMARY_OUTPUT, index=False)
 
+    # Create the figure output directory before plotting.
     FIGURE_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 
     plt.figure(figsize=(10, 6))
 
+    # Plot U-Net training and validation mIoU across all recorded epochs.
     plt.plot(
         unet["epoch"],
         unet["train_miou"],
@@ -148,6 +164,7 @@ def main() -> None:
         linewidth=2,
     )
 
+    # Plot the corresponding cGAN generator training and validation mIoU.
     plt.plot(
         cgan["epoch"],
         cgan["train_miou"],
@@ -162,6 +179,7 @@ def main() -> None:
         linewidth=2,
     )
 
+    # Mark the retained checkpoint epoch used by both final model configurations.
     plt.axvline(
         x=20,
         linestyle="--",
@@ -181,12 +199,14 @@ def main() -> None:
     plt.legend()
     plt.tight_layout()
 
+    # Save a high-resolution PNG version of the training-history figure.
     plt.savefig(
         FIGURE_OUTPUT,
         dpi=300,
         bbox_inches="tight",
     )
 
+    # Save the same figure as a PDF.
     plt.savefig(
         PDF_OUTPUT,
         format="pdf",
@@ -195,6 +215,7 @@ def main() -> None:
 
     plt.close()
 
+    # Report all generated evidence files and the checkpoint summary.
     print(f"Saved figure to: {FIGURE_OUTPUT}")
     print(f"Saved PDF figure to: {PDF_OUTPUT}")
     print(f"Saved summary to: {SUMMARY_OUTPUT}")

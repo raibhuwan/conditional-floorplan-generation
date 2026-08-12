@@ -29,6 +29,7 @@ PALETTE = {
 }
 
 
+# Parse the support condition, encoded count, checkpoint and output settings.
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -133,6 +134,7 @@ def parse_args():
     return parser.parse_args()
 
 
+# Select the best available accelerator, with CPU as the final fallback.
 def get_device():
     if torch.backends.mps.is_available():
         return torch.device("mps")
@@ -143,6 +145,7 @@ def get_device():
     return torch.device("cpu")
 
 
+# Load an image and convert it into the binary support condition expected by the model.
 def load_outline(
     path,
     size,
@@ -153,17 +156,21 @@ def load_outline(
         cv2.IMREAD_GRAYSCALE,
     )
 
+    # Stop if OpenCV cannot read the supplied support-condition image.
     if image is None:
         raise FileNotFoundError(
             f"Could not read support image: {path}"
         )
 
+    # Resize using nearest-neighbour interpolation so binary boundaries
+    # are not blurred by interpolation.
     image = cv2.resize(
         image,
         (size, size),
         interpolation=cv2.INTER_NEAREST,
     )
 
+    # Convert the grayscale image into a binary foreground/background support mask.
     support = (
         image > threshold
     ).astype(np.float32)
@@ -178,11 +185,13 @@ def load_outline(
     return support
 
 
+# Construct the two-channel model input from support and encoded count conditions.
 def build_input(
     support,
     encoded_count,
     max_count,
 ):
+    # Reject encoded counts outside the range supported by the normalisation scheme.
     if encoded_count < 0:
         raise ValueError(
             "The encoded connected-region count must "
@@ -195,17 +204,21 @@ def build_input(
             f"than max_count={max_count}."
         )
 
+    # Normalise the encoded count to the same [0, 1] scale used during training.
     count_value = (
         float(encoded_count)
         / float(max_count)
     )
 
+    # Repeat the scalar count over the complete spatial field so it can
+    # be supplied as the second convolutional input channel.
     count_channel = np.full_like(
         support,
         count_value,
         dtype=np.float32,
     )
 
+    # Stack the binary support mask and normalised count channel.
     model_input = np.stack(
         [
             support.astype(np.float32),
@@ -214,16 +227,19 @@ def build_input(
         axis=0,
     )
 
+    # Add the batch dimension expected by the U-Net.
     return (
         torch.from_numpy(model_input)
         .unsqueeze(0)
     )
 
 
+# Load either a retained U-Net checkpoint or the generator from a cGAN checkpoint.
 def load_model(
     device,
     checkpoint_path,
 ):
+    # Both supported checkpoints use the same U-Net architecture for prediction.
     model = UNet(
         in_channels=2,
         out_channels=NUM_CLASSES,
@@ -235,12 +251,14 @@ def load_model(
         map_location=device,
     )
 
+    # Baseline U-Net checkpoints store their parameters under model_state.
     if "model_state" in checkpoint:
         model.load_state_dict(
             checkpoint["model_state"]
         )
         checkpoint_type = "U-Net"
 
+    # cGAN checkpoints store the semantic generator under generator_state.
     elif "generator_state" in checkpoint:
         model.load_state_dict(
             checkpoint["generator_state"]
@@ -253,6 +271,7 @@ def load_model(
             "'model_state' or 'generator_state'."
         )
 
+    # Disable training-specific behaviour during generation.
     model.eval()
 
     print(
@@ -281,14 +300,17 @@ def load_model(
     return model
 
 
+# Convert a semantic class-ID mask into an RGB visualisation.
 def colourise_mask(mask):
     height, width = mask.shape
 
+    # Start with an empty RGB canvas matching the semantic mask dimensions.
     rgb = np.zeros(
         (height, width, 3),
         dtype=np.uint8,
     )
 
+    # Assign the predefined display colour to each semantic class.
     for class_id, colour in PALETTE.items():
         rgb[
             mask == class_id
@@ -297,6 +319,7 @@ def colourise_mask(mask):
     return rgb
 
 
+# Save the generated semantic layout as PNG, PDF and optionally a raw NumPy mask.
 def save_outputs(
     mask,
     out_path,
@@ -312,8 +335,10 @@ def save_outputs(
         exist_ok=True,
     )
 
+    # Convert class IDs into their RGB visual representation.
     rgb = colourise_mask(mask)
 
+    # OpenCV writes BGR images, so convert the RGB visualisation before saving.
     bgr = cv2.cvtColor(
         rgb,
         cv2.COLOR_RGB2BGR,
@@ -329,6 +354,7 @@ def save_outputs(
             f"Could not save PNG output: {out_path}"
         )
 
+    # Save the same colourised semantic layout as a PDF.
     pdf_path = (
         os.path.splitext(out_path)[0]
         + ".pdf"
@@ -358,6 +384,7 @@ def save_outputs(
 
     plt.close(figure)
 
+    # Optionally preserve the raw class-ID mask for later quantitative analysis.
     if mask_out_path is not None:
         mask_directory = (
             os.path.dirname(mask_out_path)
@@ -377,6 +404,7 @@ def save_outputs(
     return pdf_path
 
 
+# Run the complete conditional floor-plan generation workflow.
 def main():
     args = parse_args()
     device = get_device()
@@ -407,23 +435,29 @@ def main():
         args.apply_morphology,
     )
 
+    # Prepare the filled binary support condition from the supplied image.
     support = load_outline(
         args.outline_path,
         size=args.size,
         threshold=args.threshold,
     )
 
+    # Combine the support mask and normalised encoded count into the
+    # same two-channel representation used during model training.
     model_input = build_input(
         support,
         encoded_count=args.room_count,
         max_count=args.max_count,
     ).to(device)
 
+    # Load the selected trained semantic prediction model.
     model = load_model(
         device,
         args.ckpt_path,
     )
 
+    # Generate class logits without gradient calculation and convert
+    # them into one semantic class ID per pixel.
     with torch.no_grad():
         logits = model(model_input)
 
@@ -445,6 +479,7 @@ def main():
         support == 0
     ] = BG
 
+    # Optionally apply the fixed morphology post-processing procedure.
     if args.apply_morphology:
         prediction = (
             refine_semantic_mask_morphology(
@@ -462,6 +497,7 @@ def main():
             support == 0
         ] = BG
 
+    # Save the final semantic prediction in the requested output formats.
     pdf_path = save_outputs(
         prediction,
         args.out_path,

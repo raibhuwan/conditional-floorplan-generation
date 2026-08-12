@@ -34,6 +34,7 @@ os.makedirs(OUT_CKPT, exist_ok=True)
 os.makedirs(OUT_LOGS, exist_ok=True)
 
 
+# Parse command-line options used to configure U-Net training.
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Train the U-Net baseline for semantic floor plan generation."
@@ -95,12 +96,14 @@ def parse_args():
     return parser.parse_args()
 
 
+# Set Python, NumPy and PyTorch random seeds for reproducible execution.
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
 
 
+# Select Apple MPS acceleration when available, otherwise use the CPU.
 def get_device():
     if torch.backends.mps.is_available():
         return torch.device("mps")
@@ -120,6 +123,7 @@ def mean_iou(pred, target, num_classes=NUM_CLASSES, ignore_index=0):
     """
     ious = []
 
+    # Evaluate each semantic class separately before averaging valid scores.
     for class_id in range(num_classes):
         if ignore_index is not None and class_id == ignore_index:
             continue
@@ -130,6 +134,7 @@ def mean_iou(pred, target, num_classes=NUM_CLASSES, ignore_index=0):
         intersection = (pred_class & target_class).sum().item()
         union = (pred_class | target_class).sum().item()
 
+        # Skip classes that are absent from both prediction and target.
         if union == 0:
             continue
 
@@ -168,6 +173,7 @@ def save_sample_batch(x, y, pred, epoch, prefix="train"):
         ground_truth_rgb = colorize_mask(ground_truth)
         prediction_rgb = colorize_mask(prediction)
 
+        # Place the support, ground truth and prediction side by side.
         combined = np.concatenate(
             [support_rgb, ground_truth_rgb, prediction_rgb],
             axis=1,
@@ -202,7 +208,6 @@ def initialise_log(log_path):
             ]
         )
 
-
 def append_log_row(
     log_path,
     epoch,
@@ -231,24 +236,32 @@ def append_log_row(
         )
 
 
+# Run the complete U-Net training and validation workflow.
 def main():
     args = parse_args()
+
+    # Apply the selected random seed before model and data-loader setup.
     set_seed(args.seed)
 
     device = get_device()
     print("Device:", device)
 
+    # Load the processed floor samples used for conditional inputs and targets.
     dataset = FloorplanNPZDataset(
         args.data_dir,
         max_count=args.max_count,
     )
 
+    # Load the fixed train, validation and test partition.
     split = load_split(args.split_path)
 
+    # Training samples are used for parameter learning and validation samples
+    # are used for model selection. The test partition remains separate.
     train_dataset = Subset(dataset, split["train"])
     validation_dataset = Subset(dataset, split["val"])
     test_count = len(split["test"])
 
+    # Shuffle training batches between epochs while keeping validation order fixed.
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -273,18 +286,21 @@ def main():
         f"test={test_count}"
     )
 
+    # Create the U-Net with two conditional input channels and nine output classes.
     model = UNet(
         in_channels=2,
         out_channels=NUM_CLASSES,
         base=16,
     ).to(device)
 
+    # Adam updates model parameters using the supervised cross-entropy objective.
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=args.lr,
     )
     criterion = nn.CrossEntropyLoss()
 
+    # Track the strongest validation mIoU for checkpoint selection.
     best_validation_iou = -1.0
     initialise_log(args.log_csv)
 
@@ -304,13 +320,16 @@ def main():
             inputs = inputs.to(device)
             targets = targets.to(device)
 
+            # Produce pixel-level class logits and calculate supervised loss.
             logits = model(inputs)
             loss = criterion(logits, targets)
 
+            # Back-propagate the loss and update the U-Net parameters.
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
+            # Convert logits to class predictions for training-metric monitoring.
             with torch.no_grad():
                 predictions = torch.argmax(logits, dim=1)
 
@@ -335,6 +354,7 @@ def main():
         total_validation_iou = 0.0
         validation_steps = 0
 
+        # Validation does not update model parameters.
         with torch.no_grad():
             for inputs, targets in validation_loader:
                 inputs = inputs.to(device)
@@ -386,6 +406,8 @@ def main():
                 )
                 break
 
+        # Retain a checkpoint only when validation mIoU improves.
+        # The held-out test set is not used for checkpoint selection.
         checkpoint_saved = validation_iou > best_validation_iou
 
         if checkpoint_saved:
@@ -396,6 +418,7 @@ def main():
                 args.checkpoint_name,
             )
 
+            # Save the selected model state together with its configuration.
             torch.save(
                 {
                     "epoch": epoch,
@@ -422,6 +445,7 @@ def main():
                 f"val IoU={best_validation_iou:.3f}"
             )
 
+        # Record the current epoch for later training-history analysis.
         append_log_row(
             args.log_csv,
             epoch,

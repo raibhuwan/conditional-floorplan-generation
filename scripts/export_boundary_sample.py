@@ -9,6 +9,7 @@ from src.data.dataset import FloorplanNPZDataset
 from src.data.splits import load_split
 
 
+# Parse the dataset, split and output settings for exporting one support condition.
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -56,17 +57,22 @@ def parse_args():
     return parser.parse_args()
 
 
+# Export the binary support condition from one selected processed floor sample.
 def main():
     args = parse_args()
 
+    # Load the processed dataset using the same count normalisation
+    # configuration used by the trained models.
     dataset = FloorplanNPZDataset(
         args.data_dir,
         max_count=args.max_count,
     )
 
+    # Load the fixed partition and select the requested subset.
     split = load_split(args.split_path)
     split_indices = split[args.split]
 
+    # Ensure the requested position exists within the selected split.
     if args.sample_index < 0 or args.sample_index >= len(split_indices):
         raise IndexError(
             f"sample_index={args.sample_index} is outside the "
@@ -74,12 +80,15 @@ def main():
             f"{len(split_indices) - 1}."
         )
 
+    # Convert the position within the split back to its original dataset index.
     dataset_index = int(
         split_indices[args.sample_index]
     )
 
+    # Load the two-channel condition for the selected floor sample.
     x, _ = dataset[dataset_index]
 
+    # Recover the filled binary support mask from the first input channel.
     support = (
         x[0]
         .detach()
@@ -88,6 +97,7 @@ def main():
         > 0.5
     ).astype(np.uint8)
 
+    # Recover the spatially repeated normalised count from the second channel.
     normalised_count = float(
         x[1]
         .detach()
@@ -96,18 +106,21 @@ def main():
         .max()
     )
 
+    # Reverse the normalisation to recover the encoded connected-region count.
     encoded_count = int(
         round(normalised_count * args.max_count)
     )
 
     output_directory = os.path.dirname(args.out_path)
 
+    # Create the output folder when one is included in the requested path.
     if output_directory:
         os.makedirs(
             output_directory,
             exist_ok=True,
         )
 
+    # Convert the binary support mask to an 8-bit image for PNG export.
     support_image = support * 255
 
     saved = cv2.imwrite(
@@ -120,6 +133,7 @@ def main():
             f"Could not save PNG image: {args.out_path}"
         )
 
+    # Save the same binary support condition as a PDF for figure use.
     pdf_path = os.path.splitext(
         args.out_path
     )[0] + ".pdf"
@@ -148,6 +162,7 @@ def main():
 
     plt.close(figure)
 
+    # Report the exact source sample and exported conditioning information.
     print("Data folder:", args.data_dir)
     print("Split file:", args.split_path)
     print("Split:", args.split)

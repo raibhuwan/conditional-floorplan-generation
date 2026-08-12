@@ -1,9 +1,8 @@
-#!/usr/bin/env python3
-"""Condition-sensitivity, determinism and runtime evidence for the ARP project.
+"""Evaluate condition sensitivity, determinism and local runtime.
 
 Run this script from the repository root, where ``src/`` is available.
-It does not modify training data or checkpoints. Results are written to a new
-output folder and compressed into a small ZIP file for review.
+The script does not modify training data or checkpoints. Results are written
+to a separate output folder and compressed into a ZIP archive.
 """
 
 from __future__ import annotations
@@ -44,6 +43,7 @@ PALETTE_RGB = {
 }
 
 
+# Parse command-line settings for the sensitivity, determinism and runtime tests.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -105,6 +105,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Select MPS or CUDA acceleration when available, otherwise use the CPU.
 def get_device() -> torch.device:
     if torch.backends.mps.is_available():
         return torch.device("mps")
@@ -113,6 +114,7 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
+# Synchronise accelerator work before or after timing measurements.
 def synchronize(device: torch.device) -> None:
     if device.type == "mps":
         torch.mps.synchronize()
@@ -120,29 +122,37 @@ def synchronize(device: torch.device) -> None:
         torch.cuda.synchronize(device)
 
 
+# Load, resize and binarise the support image used for all tested conditions.
 def load_support(path: Path, size: int, threshold: int) -> np.ndarray:
     image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if image is None:
         raise FileNotFoundError(f"Could not read support image: {path}")
     image = cv2.resize(image, (size, size), interpolation=cv2.INTER_AREA)
+    # Threshold the image into a binary support mask.
     support = (image > threshold).astype(np.float32)
+    # Invert unusually sparse masks to handle opposite foreground conventions.
     if support.mean() < 0.05:
         support = (image <= threshold).astype(np.float32)
     return support
 
 
+# Construct the two-channel model input for one encoded count value.
 def build_input(support: np.ndarray, count: int, max_count: int) -> torch.Tensor:
     if count < 0 or count > max_count:
         raise ValueError(f"Count {count} must be between 0 and {max_count}.")
+    # Normalise the encoded count using the same maximum applied during training.
     count_value = float(count) / float(max_count)
+    # Repeat the scalar condition across the image as the second input channel.
     count_channel = np.full_like(support, count_value, dtype=np.float32)
     array = np.stack([support.astype(np.float32), count_channel], axis=0)
     return torch.from_numpy(array).unsqueeze(0)
 
 
+# Load either a baseline U-Net or cGAN generator checkpoint for inference.
 def load_model(checkpoint_path: Path, device: torch.device) -> tuple[UNet, dict[str, Any]]:
     model = UNet(in_channels=2, out_channels=NUM_CLASSES, base=16).to(device)
     checkpoint = torch.load(str(checkpoint_path), map_location=device)
+    # Accept both checkpoint formats because both use the same U-Net generator structure.
     if "generator_state" in checkpoint:
         model.load_state_dict(checkpoint["generator_state"])
     elif "model_state" in checkpoint:
@@ -157,30 +167,35 @@ def load_model(checkpoint_path: Path, device: torch.device) -> tuple[UNet, dict[
     return model, metadata
 
 
+# Generate one semantic mask and clip its foreground to the supplied support.
 def predict(
     model: UNet,
     tensor: torch.Tensor,
     support: np.ndarray,
     device: torch.device,
 ) -> np.ndarray:
+    # Disable gradient tracking because this script performs inference only.
     with torch.no_grad():
         logits = model(tensor.to(device))
         prediction = torch.argmax(logits, dim=1)[0].detach().cpu().numpy().astype(np.uint8)
+    # Enforce the supplied support boundary for these generation examples.
     prediction[support == 0] = BG
     return prediction
 
 
 def encoded_connected_region_count(mask: np.ndarray) -> int:
-    """Match the project count definition: combined non-BG, non-wall components."""
+    """Count eight-connected components in one combined non-background, non-wall mask."""
     binary = ((mask != BG) & (mask != WALL)).astype(np.uint8)
     component_total, _ = cv2.connectedComponents(binary, connectivity=8)
     return int(component_total - 1)
 
 
+# Create a deterministic hash for exact output-comparison checks.
 def mask_hash(mask: np.ndarray) -> str:
     return hashlib.sha256(mask.tobytes()).hexdigest()
 
 
+# Convert semantic class IDs into an RGB visualisation.
 def colourise(mask: np.ndarray) -> np.ndarray:
     rgb = np.zeros((*mask.shape, 3), dtype=np.uint8)
     for class_id, colour in PALETTE_RGB.items():
@@ -188,6 +203,7 @@ def colourise(mask: np.ndarray) -> np.ndarray:
     return rgb
 
 
+# Save each semantic output as both a colour PNG and raw NumPy array.
 def save_mask_outputs(mask: np.ndarray, png_path: Path, npy_path: Path) -> None:
     png_path.parent.mkdir(parents=True, exist_ok=True)
     rgb = colourise(mask)
@@ -195,10 +211,12 @@ def save_mask_outputs(mask: np.ndarray, png_path: Path, npy_path: Path) -> None:
     np.save(str(npy_path), mask.astype(np.uint8))
 
 
+# Calculate a requested percentile from a list of timing measurements.
 def percentile(values: list[float], q: float) -> float:
     return float(np.percentile(np.asarray(values, dtype=np.float64), q))
 
 
+# Summarise repeated runtime measurements using common descriptive statistics.
 def timing_stats(milliseconds: list[float]) -> dict[str, float]:
     return {
         "mean_ms": float(statistics.mean(milliseconds)),
@@ -209,12 +227,14 @@ def timing_stats(milliseconds: list[float]) -> dict[str, float]:
     }
 
 
+# Assemble support, raw predictions and morphology outputs into one comparison image.
 def make_contact_sheet(
     support: np.ndarray,
     raw_by_count: dict[int, np.ndarray],
     morph_by_count: dict[int, np.ndarray],
     output_path: Path,
 ) -> None:
+    # Preserve the tested count order when arranging the columns.
     counts = list(raw_by_count.keys())
     tile_h, tile_w = support.shape
     label_h = 34
@@ -224,6 +244,7 @@ def make_contact_sheet(
     support_rgb = np.repeat((support[..., None] * 255).astype(np.uint8), 3, axis=2)
     for col, count in enumerate(counts):
         x0 = col * tile_w
+        # Show the same support alongside raw and morphology-refined outputs.
         tiles = [support_rgb, colourise(raw_by_count[count]), colourise(morph_by_count[count])]
         labels = [
             f"Support | input={count}",
@@ -248,6 +269,7 @@ def make_contact_sheet(
     cv2.imwrite(str(output_path), cv2.cvtColor(sheet, cv2.COLOR_RGB2BGR))
 
 
+# Run all condition-sensitivity, determinism and runtime evidence checks.
 def main() -> None:
     args = parse_args()
     if args.repeat_runs < 2:
@@ -258,6 +280,7 @@ def main() -> None:
     support_path = Path(args.outline_path).resolve()
     checkpoint_path = Path(args.ckpt_path).resolve()
     output_dir = Path(args.out_dir).resolve()
+    # Recreate the evidence folder so results belong only to the current run.
     if output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -265,6 +288,7 @@ def main() -> None:
     device = get_device()
     support = load_support(support_path, args.size, args.threshold)
 
+    # Measure checkpoint/model initialisation separately from inference runtime.
     load_start = time.perf_counter()
     model, checkpoint_metadata = load_model(checkpoint_path, device)
     synchronize(device)
@@ -274,15 +298,18 @@ def main() -> None:
     morph_by_count: dict[int, np.ndarray] = {}
     result_rows: list[dict[str, Any]] = []
 
+    # Generate raw and morphology-refined outputs for every tested count value.
     for count in args.counts:
         tensor = build_input(support, count, args.max_count)
 
+        # Synchronise accelerator work so the single-run inference timing is meaningful.
         synchronize(device)
         start = time.perf_counter()
         raw = predict(model, tensor, support, device)
         synchronize(device)
         one_inference_ms = (time.perf_counter() - start) * 1000.0
 
+        # Time morphology separately from neural-network inference.
         start = time.perf_counter()
         morph = refine_semantic_mask_morphology(
             raw,
@@ -290,6 +317,7 @@ def main() -> None:
             kernel_size=args.kernel_size,
             min_area=args.min_area,
         )
+        # Apply the same support clipping to the refined generation output.
         morph[support == 0] = BG
         one_morphology_ms = (time.perf_counter() - start) * 1000.0
 
@@ -306,6 +334,7 @@ def main() -> None:
             output_dir / "generated" / f"count_{count:02d}_morphology.npy",
         )
 
+        # Record output counts, hashes, pixel totals and single-run timings.
         result_rows.append(
             {
                 "requested_encoded_count": count,
@@ -334,6 +363,7 @@ def main() -> None:
             output_dir / "determinism" / f"count_{args.repeat_count:02d}_repeat_{run_index + 1}.png",
             output_dir / "determinism" / f"count_{args.repeat_count:02d}_repeat_{run_index + 1}.npy",
         )
+    # Exact array equality checks whether repeated identical inputs produce identical masks.
     deterministic_exact = all(np.array_equal(repeated[0], item) for item in repeated[1:])
     repeat_changed_pixels = [int(np.count_nonzero(repeated[0] != item)) for item in repeated[1:]]
 
@@ -354,10 +384,12 @@ def main() -> None:
             }
         )
 
+    # Count unique hashes to determine whether changing the encoded condition changes outputs.
     all_raw_hashes = {mask_hash(mask) for mask in raw_by_count.values()}
     all_morph_hashes = {mask_hash(mask) for mask in morph_by_count.values()}
 
     # Runtime benchmark after warm-up. Model load time is reported separately.
+    # Use one fixed input for repeated runtime measurements after warm-up.
     timing_tensor = build_input(support, args.repeat_count, args.max_count).to(device)
     for _ in range(args.warmup_runs):
         _ = predict(model, timing_tensor, support, device)
@@ -386,16 +418,19 @@ def main() -> None:
         morphology_times_ms.append((time.perf_counter() - start) * 1000.0)
 
     # Write structured evidence.
+    # Save per-condition measurements in a machine-readable CSV file.
     with (output_dir / "condition_results.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(result_rows[0].keys()))
         writer.writeheader()
         writer.writerows(result_rows)
 
+    # Save changed-pixel rates between adjacent tested count conditions.
     with (output_dir / "adjacent_count_sensitivity.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(adjacent_sensitivity[0].keys()))
         writer.writeheader()
         writer.writerows(adjacent_sensitivity)
 
+    # Combine the environment, input settings, sensitivity, determinism and runtime evidence.
     summary = {
         "test_purpose": (
             "Evidence only: assess sensitivity to the encoded connected-region count, "
@@ -445,6 +480,7 @@ def main() -> None:
     with (output_dir / "condition_sensitivity_summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2)
 
+    # Produce a compact visual comparison across all tested count values.
     make_contact_sheet(
         support,
         raw_by_count,
@@ -455,6 +491,7 @@ def main() -> None:
     readme_text = f"""Condition-sensitivity evidence\n\nCounts tested: {args.counts}\nRepeated count: {args.repeat_count} ({args.repeat_runs} runs)\nDevice: {device}\n\nKey interpretation rule:\nThis test checks whether the scalar encoded connected-region condition changes the output.\nIt does not prove that the model can produce an exact requested number of architectural rooms.\n\nSee condition_sensitivity_summary.json and the contact sheet for the results.\n"""
     (output_dir / "README.txt").write_text(readme_text, encoding="utf-8")
 
+    # Package the generated evidence files into a single archive.
     archive_path = shutil.make_archive(str(output_dir), "zip", root_dir=output_dir)
 
     print("\nCondition-sensitivity test complete")

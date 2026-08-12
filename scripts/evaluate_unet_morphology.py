@@ -29,6 +29,7 @@ OUT_CSV = "outputs/metrics_unet_morphology_room_count_fixed.csv"
 os.makedirs("outputs", exist_ok=True)
 
 
+# Parse command-line settings for U-Net evaluation with morphology refinement.
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -46,6 +47,7 @@ def parse_args():
     return parser.parse_args()
 
 
+# Select Apple MPS acceleration when available, otherwise use the CPU.
 def get_device():
     if torch.backends.mps.is_available():
         return torch.device("mps")
@@ -59,6 +61,7 @@ def mean_iou(pred, gt, num_classes=NUM_CLASSES, ignore=(BG,)):
     """
     ious = []
 
+    # Calculate IoU independently for each eligible semantic class.
     for class_id in range(num_classes):
         if class_id in ignore:
             continue
@@ -75,6 +78,7 @@ def mean_iou(pred, gt, num_classes=NUM_CLASSES, ignore=(BG,)):
             gt_class,
         ).sum()
 
+        # Classes absent from both masks do not contribute to the sample mean.
         if union == 0:
             continue
 
@@ -92,20 +96,23 @@ def extract_instances(
     Extract class-specific connected components.
 
     These components are used for adjacency and compactness only. They are
-    not used for room-count error because the requested room count was
-    constructed from one combined non-background, non-wall mask.
+    not used for connected-region count error because the encoded target
+    count was constructed from one combined non-background, non-wall mask.
     """
     instances = []
 
+    # Extract components independently for each retained room-type class.
     for class_id in range(NUM_CLASSES):
         if class_id in ignore_ids:
             continue
 
         class_mask = (mask == class_id).astype(np.uint8)
 
+        # Skip the class when its total foreground area is below the threshold.
         if int(class_mask.sum()) < min_area:
             continue
 
+        # Identify eight-connected components within the current semantic class.
         component_count, labels, stats, _ = (
             cv2.connectedComponentsWithStats(
                 class_mask,
@@ -113,11 +120,13 @@ def extract_instances(
             )
         )
 
+        # Component 0 is background, so inspect foreground components only.
         for component_id in range(1, component_count):
             area = int(
                 stats[component_id, cv2.CC_STAT_AREA]
             )
 
+            # Exclude components smaller than the minimum instance area.
             if area < min_area:
                 continue
 
@@ -138,6 +147,8 @@ def extract_instances(
                 labels == component_id
             ).astype(np.uint8)
 
+            # Preserve the geometry and class identity required by the
+            # adjacency and compactness calculations.
             instances.append(
                 {
                     "class_id": class_id,
@@ -156,13 +167,14 @@ def count_rooms_from_semantic_mask(
     wall_id=WALL,
 ):
     """
-    Count rooms from one combined binary room-region mask.
+    Count connected regions from one combined binary room-region mask.
 
     All non-background and non-wall semantic pixels are merged before
     connected components are calculated. Semantic class boundaries do not
-    create additional rooms. This matches the room-count construction used
+    create additional regions. This matches the count construction used
     for the conditioning channel during preprocessing.
     """
+    # Merge all non-background and non-wall classes before component counting.
     room_region_mask = np.logical_and(
         mask != background_id,
         mask != wall_id,
@@ -171,11 +183,13 @@ def count_rooms_from_semantic_mask(
     if int(room_region_mask.sum()) == 0:
         return 0
 
+    # Use the same eight-connectivity rule applied during preprocessing.
     component_count, _ = cv2.connectedComponents(
         room_region_mask,
         connectivity=8,
     )
 
+    # OpenCV includes the background as component 0.
     return int(component_count - 1)
 
 
@@ -188,6 +202,7 @@ def compactness_of_instance(instance_mask):
     if area <= 0:
         return 0.0
 
+    # Use external contours to estimate the component perimeter.
     contours, _ = cv2.findContours(
         instance_mask,
         cv2.RETR_EXTERNAL,
@@ -197,11 +212,13 @@ def compactness_of_instance(instance_mask):
     if not contours:
         return 0.0
 
+    # Sum contour lengths when more than one external contour is present.
     perimeter = sum(
         cv2.arcLength(contour, True)
         for contour in contours
     )
 
+    # Avoid division by zero for degenerate components.
     if perimeter <= 1e-6:
         return 0.0
 
@@ -213,11 +230,12 @@ def compactness_of_instance(instance_mask):
 
 def adjacency_edges(instances):
     """
-    Build class-level adjacency edges from class-specific room instances.
+    Build class-level adjacency edges from class-specific instances.
     """
     edges = set()
     kernel = np.ones((3, 3), np.uint8)
 
+    # Dilate each instance once so nearby regions can be tested for contact.
     dilated_masks = [
         cv2.dilate(
             instance["mask"].astype(np.uint8),
@@ -227,6 +245,7 @@ def adjacency_edges(instances):
         for instance in instances
     ]
 
+    # Compare every unique pair of extracted instances.
     for first_index in range(len(instances)):
         first_class = instances[first_index]["class_id"]
 
@@ -238,15 +257,18 @@ def adjacency_edges(instances):
                 second_index
             ]["class_id"]
 
+            # Same-class component pairs do not create class-level adjacency edges.
             if first_class == second_class:
                 continue
 
+            # Overlap after one dilation step is treated as adjacency.
             touching = np.logical_and(
                 dilated_masks[first_index] > 0,
                 dilated_masks[second_index] > 0,
             ).any()
 
             if touching:
+                # Store each unordered semantic class pair only once.
                 edges.add(
                     tuple(
                         sorted(
@@ -262,12 +284,15 @@ def f1_edges(predicted_edges, ground_truth_edges):
     """
     Calculate F1 score between two class-level adjacency-edge sets.
     """
+    # Two empty edge sets represent complete agreement for that sample.
     if not predicted_edges and not ground_truth_edges:
         return 1.0
 
+    # If only one edge set is empty, no adjacency relationship is matched.
     if not predicted_edges or not ground_truth_edges:
         return 0.0
 
+    # Derive the F1 components from the predicted and reference edge sets.
     true_positives = len(
         predicted_edges.intersection(
             ground_truth_edges
@@ -315,6 +340,7 @@ def boundary_violation_rate(
     Measure the proportion of predicted non-background pixels outside the
     binary floor-plan support mask.
     """
+    # Include every predicted non-background class, including wall/structure.
     predicted_non_background = pred_mask != BG
     total_predicted_pixels = int(
         predicted_non_background.sum()
@@ -323,6 +349,7 @@ def boundary_violation_rate(
     if total_predicted_pixels == 0:
         return 0.0
 
+    # Count predicted foreground pixels positioned outside the support mask.
     outside_pixels = np.logical_and(
         predicted_non_background,
         support_mask == 0,
@@ -338,8 +365,10 @@ def get_expected_room_count_from_input(
     max_count,
 ):
     """
-    Recover the requested room count from the normalised count channel.
+    Recover the encoded connected-region count from the normalised
+    conditional count channel.
     """
+    # The normalised scalar is repeated across the full second input channel.
     count_channel = (
         inputs[0, 1]
         .detach()
@@ -350,6 +379,7 @@ def get_expected_room_count_from_input(
         count_channel.max()
     )
 
+    # Reverse the input normalisation to recover the encoded integer count.
     return int(
         round(normalised_count * max_count)
     )
@@ -360,7 +390,8 @@ def room_count_error(
     predicted_count,
 ):
     """
-    Calculate absolute room-count error for one floor plan.
+    Calculate absolute error between the encoded target count and the
+    connected-region count reconstructed from the prediction.
     """
     return abs(
         expected_count - predicted_count
@@ -377,17 +408,20 @@ def load_model(device, checkpoint_path):
         base=16,
     ).to(device)
 
+    # Load the checkpoint selected during validation.
     checkpoint = torch.load(
         checkpoint_path,
         map_location=device,
     )
 
+    # Require a U-Net model state to avoid loading an incompatible checkpoint.
     if "model_state" not in checkpoint:
         raise KeyError(
             "The checkpoint does not contain 'model_state'. "
             "Use a U-Net checkpoint produced by train_unet.py."
         )
 
+    # Restore the retained parameters and disable training-specific behaviour.
     model.load_state_dict(
         checkpoint["model_state"]
     )
@@ -396,18 +430,21 @@ def load_model(device, checkpoint_path):
     return model, checkpoint
 
 
+# Evaluate the retained U-Net after morphology refinement on the held-out test set.
 def main():
     args = parse_args()
 
     device = get_device()
     print("Device:", device)
 
+    # Load the processed dataset and the fixed train/validation/test split.
     dataset = FloorplanNPZDataset(
         args.data_dir,
         max_count=args.max_count,
     )
     split = load_split(args.split_path)
 
+    # Restrict evaluation to the held-out test indices and preserve their order.
     test_indices = split["test"]
     test_dataset = Subset(
         dataset,
@@ -436,6 +473,7 @@ def main():
         "non-background, non-wall mask."
     )
 
+    # Load the validation-selected U-Net checkpoint used for all test predictions.
     model, checkpoint = load_model(
         device,
         args.ckpt_path,
@@ -447,6 +485,7 @@ def main():
         f"stored_val_iou={checkpoint.get('val_iou', 'unknown')}"
     )
 
+    # Store one complete metric record for each held-out floor sample.
     rows = []
 
     for test_position, (inputs, targets) in enumerate(
@@ -455,6 +494,7 @@ def main():
         inputs = inputs.to(device)
         targets = targets.to(device)
 
+        # Run raw U-Net inference without gradient calculation.
         with torch.no_grad():
             logits = model(inputs)
             predictions = torch.argmax(
@@ -462,6 +502,7 @@ def main():
                 dim=1,
             )
 
+        # Convert model output and reference target to NumPy semantic masks.
         pred_mask = (
             predictions[0]
             .cpu()
@@ -475,6 +516,7 @@ def main():
             .astype(np.uint8)
         )
 
+        # Recover the filled binary support condition from the first input channel.
         support_mask = (
             inputs[0, 0]
             .detach()
@@ -483,6 +525,7 @@ def main():
             > 0.5
         ).astype(np.uint8)
 
+        # Recover the encoded connected-region count from the second input channel.
         expected_room_count = (
             get_expected_room_count_from_input(
                 inputs,
@@ -490,6 +533,7 @@ def main():
             )
         )
 
+        # Apply the fixed morphology procedure to the raw semantic prediction.
         pred_refined = refine_semantic_mask_morphology(
             pred_mask,
             num_classes=NUM_CLASSES,
@@ -497,6 +541,7 @@ def main():
             min_area=args.min_area,
         ).astype(np.uint8)
 
+        # Reconstruct connected-region counts using the same combined-mask rule.
         gt_room_count = (
             count_rooms_from_semantic_mask(
                 gt_mask
@@ -508,6 +553,7 @@ def main():
             )
         )
 
+        # Verify that the encoded condition agrees with the reconstructed target count.
         target_count_matches_gt = int(
             expected_room_count
             == gt_room_count
@@ -518,14 +564,15 @@ def main():
             predicted_room_count,
         )
 
+        # Measure semantic overlap on the refined prediction while excluding background.
         miou = mean_iou(
             pred_refined,
             gt_mask,
             ignore=(BG,),
         )
 
-        # Class-specific instances remain necessary for adjacency and
-        # compactness, but they are not used for room-count error.
+        # Class-specific components remain necessary for adjacency and
+        # compactness, but they are not used for connected-region count error.
         gt_instances = extract_instances(
             gt_mask
         )
@@ -533,6 +580,7 @@ def main():
             pred_refined
         )
 
+        # Evaluate the refined mask without clipping it to the support boundary.
         boundary_violation = (
             boundary_violation_rate(
                 pred_refined,
@@ -540,6 +588,7 @@ def main():
             )
         )
 
+        # Compare class-level adjacency relationships after refinement.
         gt_edges = adjacency_edges(
             gt_instances
         )
@@ -551,6 +600,7 @@ def main():
             gt_edges,
         )
 
+        # Calculate compactness for retained ground-truth and predicted components.
         gt_compactness_values = [
             compactness_of_instance(
                 instance["mask"]
@@ -583,6 +633,7 @@ def main():
             else 0.0
         )
 
+        # Preserve sample-level results for later aggregation and analysis.
         rows.append(
             {
                 "idx": test_position,
@@ -620,6 +671,7 @@ def main():
             }
         )
 
+        # Print periodic progress while processing the held-out test set.
         if (test_position + 1) % 50 == 0:
             print(
                 f"[{test_position + 1}/"
@@ -633,6 +685,7 @@ def main():
                 f"RCerr={count_error}"
             )
 
+    # Stop rather than writing an empty CSV if evaluation produced no samples.
     if not rows:
         raise RuntimeError(
             "No evaluation rows were produced."
@@ -647,6 +700,7 @@ def main():
         exist_ok=True,
     )
 
+    # Save the sample-level metric records to CSV.
     with open(
         args.out_csv,
         "w",
@@ -660,6 +714,7 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
+    # Aggregate sample-level values to produce overall held-out test means.
     mean_miou = float(
         np.mean(
             [
@@ -719,6 +774,7 @@ def main():
         )
     )
 
+    # Count any disagreement between the encoded condition and reconstructed target count.
     target_count_mismatches = sum(
         1
         for row in rows
@@ -763,6 +819,7 @@ def main():
         f"{len(rows)}"
     )
 
+    # Report whether preprocessing and evaluation use a consistent count definition.
     if target_count_mismatches:
         print(
             "WARNING: Some encoded room counts do not match the "

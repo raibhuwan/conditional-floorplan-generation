@@ -28,6 +28,8 @@ OUTPUT_PATH = (
     "figure_5_4_refinement_comparison.png"
 )
 
+# Associate each model/refinement configuration with its existing
+# sample-level evaluation file.
 METRIC_FILES = {
     "U-Net baseline": (
         "outputs/metrics_unet_room_count_fixed.csv"
@@ -71,6 +73,8 @@ CLASS_COLOURS = [
 SEMANTIC_CMAP = ListedColormap(CLASS_COLOURS)
 
 
+# Parse settings for selecting the held-out sample, checkpoints,
+# refinement parameters and output figure.
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -135,12 +139,14 @@ def parse_args():
     return parser.parse_args()
 
 
+# Select Apple MPS acceleration when available, otherwise use the CPU.
 def get_device():
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
 
 
+# Load the retained supervised U-Net checkpoint for semantic prediction.
 def load_unet(device, checkpoint_path):
     model = UNet(
         in_channels=2,
@@ -153,11 +159,13 @@ def load_unet(device, checkpoint_path):
         map_location=device,
     )
 
+    # Require the expected U-Net state key before loading parameters.
     if "model_state" not in checkpoint:
         raise KeyError(
             "The U-Net checkpoint does not contain 'model_state'."
         )
 
+    # Restore the validation-selected parameters and enable evaluation behaviour.
     model.load_state_dict(
         checkpoint["model_state"]
     )
@@ -165,6 +173,7 @@ def load_unet(device, checkpoint_path):
     return model, checkpoint
 
 
+# Load the U-Net generator stored inside the retained cGAN checkpoint.
 def load_cgan_generator(device, checkpoint_path):
     model = UNet(
         in_channels=2,
@@ -177,12 +186,15 @@ def load_cgan_generator(device, checkpoint_path):
         map_location=device,
     )
 
+    # Require the generator state so an incompatible checkpoint
+    # cannot be used silently.
     if "generator_state" not in checkpoint:
         raise KeyError(
             "The cGAN checkpoint does not contain "
             "'generator_state'."
         )
 
+    # Restore the retained generator parameters and enable evaluation behaviour.
     model.load_state_dict(
         checkpoint["generator_state"]
     )
@@ -190,7 +202,10 @@ def load_cgan_generator(device, checkpoint_path):
     return model, checkpoint
 
 
+# Generate one semantic class-ID mask from a model and conditional input.
 def predict_mask(model, inputs):
+    # Prediction requires no gradient calculation because model
+    # parameters are not updated during figure generation.
     with torch.no_grad():
         logits = model(inputs)
         prediction = torch.argmax(
@@ -198,6 +213,7 @@ def predict_mask(model, inputs):
             dim=1,
         )
 
+    # Convert the single predicted mask to an unsigned NumPy array.
     return (
         prediction[0]
         .detach()
@@ -207,7 +223,9 @@ def predict_mask(model, inputs):
     )
 
 
+# Recover the encoded connected-region count from the second input channel.
 def expected_room_count(inputs, max_count):
+    # The normalised count scalar is repeated across the complete channel.
     count_channel = (
         inputs[0, 1]
         .detach()
@@ -217,11 +235,15 @@ def expected_room_count(inputs, max_count):
     normalised_count = float(
         count_channel.max()
     )
+
+    # Reverse the normalisation used when constructing the conditional input.
     return int(
         round(normalised_count * max_count)
     )
 
 
+# Load sample-level metrics for all six configurations for the
+# same selected held-out floor.
 def load_sample_metrics(
     test_position,
     expected_dataset_index,
@@ -231,6 +253,7 @@ def load_sample_metrics(
     for configuration, csv_path in METRIC_FILES.items():
         path = Path(csv_path)
 
+        # Require the existing evaluation file for each configuration.
         if not path.exists():
             raise FileNotFoundError(
                 f"Metric file not found: {path}"
@@ -247,6 +270,8 @@ def load_sample_metrics(
             "room_count_error",
         }
 
+        # Check that the metric file contains all values needed
+        # for sample alignment and figure annotation.
         missing = required_columns.difference(
             frame.columns
         )
@@ -257,6 +282,8 @@ def load_sample_metrics(
                 f"{sorted(missing)}"
             )
 
+        # Select the metric row corresponding to the requested
+        # position within the held-out test partition.
         selected = frame.loc[
             frame["idx"] == test_position
         ]
@@ -269,6 +296,8 @@ def load_sample_metrics(
 
         row = selected.iloc[0]
 
+        # Confirm that every metric file refers to the same underlying
+        # dataset sample used for the qualitative comparison.
         if int(row["dataset_index"]) != int(
             expected_dataset_index
         ):
@@ -283,6 +312,7 @@ def load_sample_metrics(
     return metrics
 
 
+# Format the sample-level evaluation values displayed below each prediction.
 def metric_subtitle(row):
     return (
         f"mIoU {row['miou_no_bg']:.3f} | "
@@ -291,6 +321,7 @@ def metric_subtitle(row):
     )
 
 
+# Display one semantic class-ID mask using the shared qualitative palette.
 def show_semantic(
     axis,
     mask,
@@ -311,6 +342,7 @@ def show_semantic(
         pad=7,
     )
 
+    # Add the corresponding sample-level metrics when supplied.
     if subtitle:
         axis.text(
             0.5,
@@ -325,10 +357,12 @@ def show_semantic(
     axis.axis("off")
 
 
+# Generate the baseline and refinement comparison for one held-out test sample.
 def main():
     args = parse_args()
     device = get_device()
 
+    # Load the processed dataset and fixed floor-sample-level split.
     dataset = FloorplanNPZDataset(
         args.data_dir,
         max_count=args.max_count,
@@ -338,19 +372,24 @@ def main():
     )
     test_indices = split["test"]
 
+    # Ensure the requested position exists within the held-out test partition.
     if not 0 <= args.test_position < len(test_indices):
         raise IndexError(
             f"test_position must be between 0 and "
             f"{len(test_indices) - 1}."
         )
 
+    # Convert the test-split position to the original dataset index.
     dataset_index = int(
         test_indices[args.test_position]
     )
 
     inputs, target = dataset[dataset_index]
 
+    # Add the batch dimension required by the models.
     inputs = inputs.unsqueeze(0).to(device)
+
+    # Convert the reference semantic target to a NumPy class-ID mask.
     target_mask = (
         target.detach()
         .cpu()
@@ -358,6 +397,7 @@ def main():
         .astype(np.uint8)
     )
 
+    # Recover the filled binary support condition from the first input channel.
     support_mask = (
         inputs[0, 0]
         .detach()
@@ -366,11 +406,14 @@ def main():
         > 0.5
     ).astype(np.uint8)
 
+    # Recover the encoded connected-region condition from the second channel.
+    # The historical variable name requested_count is retained unchanged.
     requested_count = expected_room_count(
         inputs,
         args.max_count,
     )
 
+    # Load the same retained checkpoints used in the quantitative evaluation.
     unet, unet_checkpoint = load_unet(
         device,
         args.unet_ckpt,
@@ -380,6 +423,7 @@ def main():
         args.cgan_ckpt,
     )
 
+    # Produce the raw semantic predictions before any refinement is applied.
     unet_baseline = predict_mask(
         unet,
         inputs,
@@ -389,6 +433,7 @@ def main():
         inputs,
     )
 
+    # Apply the fixed morphology procedure independently to both baseline outputs.
     unet_morphology = (
         refine_semantic_mask_morphology(
             unet_baseline,
@@ -406,6 +451,8 @@ def main():
         ).astype(np.uint8)
     )
 
+    # Apply the compactness-driven hill-climbing procedure independently
+    # to the same raw U-Net and cGAN baseline predictions.
     unet_hillclimb = (
         refine_semantic_mask_hillclimb(
             unet_baseline,
@@ -425,11 +472,14 @@ def main():
         ).astype(np.uint8)
     )
 
+    # Load the previously calculated quantitative metrics for the
+    # exact same held-out sample and all six configurations.
     sample_metrics = load_sample_metrics(
         args.test_position,
         dataset_index,
     )
 
+    # Arrange support, target, baseline and refined outputs in a 3x3 figure.
     figure, axes = plt.subplots(
         3,
         3,
@@ -476,6 +526,7 @@ def main():
         fontsize=11,
     )
 
+    # Display U-Net baseline and both U-Net refinement variants.
     show_semantic(
         axes[1, 0],
         unet_baseline,
@@ -503,6 +554,7 @@ def main():
         ),
     )
 
+    # Display cGAN baseline and both cGAN refinement variants.
     show_semantic(
         axes[2, 0],
         cgan_baseline,
@@ -530,6 +582,7 @@ def main():
         ),
     )
 
+    # Explain the abbreviated metric labels displayed beneath each output.
     figure.text(
         0.5,
         0.015,
@@ -546,17 +599,21 @@ def main():
     )
 
     output_path = Path(args.output)
+
+    # Create the destination directory before saving the comparison figure.
     output_path.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
+    # Save a high-resolution raster version of the comparison.
     figure.savefig(
         output_path,
         dpi=300,
         bbox_inches="tight",
     )
 
+    # Save the same figure as a PDF.
     pdf_path = output_path.with_suffix(
         ".pdf"
     )
@@ -567,6 +624,7 @@ def main():
 
     plt.close(figure)
 
+    # Report the exact checkpoints and held-out sample used to produce the figure.
     print("Device:", device)
     print(
         "U-Net checkpoint:",

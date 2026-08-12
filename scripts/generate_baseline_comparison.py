@@ -45,6 +45,7 @@ CLASS_COLOURS = [
 SEMANTIC_CMAP = ListedColormap(CLASS_COLOURS)
 
 
+# Parse settings for selecting the held-out sample, checkpoints and output figure.
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -107,6 +108,7 @@ def parse_args():
     return parser.parse_args()
 
 
+# Select Apple MPS acceleration when available, otherwise use the CPU.
 def get_device():
     if torch.backends.mps.is_available():
         return torch.device("mps")
@@ -114,6 +116,7 @@ def get_device():
     return torch.device("cpu")
 
 
+# Load the shared U-Net architecture from either a baseline or cGAN checkpoint state.
 def load_model(
     checkpoint_path,
     device,
@@ -130,12 +133,15 @@ def load_model(
         map_location=device,
     )
 
+    # Require the expected state key so an incompatible checkpoint
+    # cannot be loaded silently.
     if state_key not in checkpoint:
         raise KeyError(
             f"Checkpoint {checkpoint_path} does not contain "
             f"the key '{state_key}'."
         )
 
+    # Restore the selected model parameters and disable training behaviour.
     model.load_state_dict(
         checkpoint[state_key]
     )
@@ -144,7 +150,9 @@ def load_model(
     return model, checkpoint
 
 
+# Generate one semantic class-ID prediction from the selected model.
 def predict_mask(model, inputs):
+    # Prediction requires no gradient calculation because no parameters are updated.
     with torch.no_grad():
         logits = model(inputs)
         prediction = torch.argmax(
@@ -152,6 +160,7 @@ def predict_mask(model, inputs):
             dim=1,
         )
 
+    # Convert the single predicted mask to an unsigned NumPy array for visualisation.
     return (
         prediction[0]
         .detach()
@@ -161,10 +170,12 @@ def predict_mask(model, inputs):
     )
 
 
+# Recover the encoded connected-region count from the second input channel.
 def decode_connected_region_count(
     inputs,
     max_count,
 ):
+    # The normalised count scalar is repeated across the full spatial channel.
     count_channel = (
         inputs[0, 1]
         .detach()
@@ -176,11 +187,13 @@ def decode_connected_region_count(
         count_channel.max()
     )
 
+    # Reverse the normalisation used when the conditional input was constructed.
     return int(
         round(normalised_count * max_count)
     )
 
 
+# Load the metric row corresponding to the same selected held-out floor sample.
 def load_sample_metric(
     csv_path,
     test_position,
@@ -188,6 +201,7 @@ def load_sample_metric(
 ):
     path = Path(csv_path)
 
+    # Stop if the required sample-level evaluation file is unavailable.
     if not path.exists():
         raise FileNotFoundError(
             f"Metric file not found: {path}"
@@ -202,6 +216,7 @@ def load_sample_metric(
         "room_count_error",
     }
 
+    # Require the columns needed for sample alignment and figure annotation.
     missing = required_columns.difference(
         frame.columns
     )
@@ -212,6 +227,7 @@ def load_sample_metric(
             f"{sorted(missing)}"
         )
 
+    # Select the metric record by its position within the held-out test split.
     selected = frame.loc[
         frame["idx"] == test_position
     ]
@@ -224,6 +240,8 @@ def load_sample_metric(
 
     row = selected.iloc[0]
 
+    # Confirm that the metric row corresponds to the same underlying
+    # dataset sample used to generate the visual comparison.
     if int(row["dataset_index"]) != int(
         expected_dataset_index
     ):
@@ -236,6 +254,7 @@ def load_sample_metric(
     return row
 
 
+# Display one semantic mask using the shared class palette.
 def show_semantic(
     axis,
     mask,
@@ -257,6 +276,7 @@ def show_semantic(
         pad=8,
     )
 
+    # Add sample-level evaluation values beneath model predictions when supplied.
     if subtitle:
         axis.text(
             0.5,
@@ -271,6 +291,7 @@ def show_semantic(
     axis.axis("off")
 
 
+# Format the sample-level semantic-overlap and count-error values for the figure.
 def metric_subtitle(row):
     return (
         f"mIoU {row['miou_no_bg']:.3f} | "
@@ -278,10 +299,12 @@ def metric_subtitle(row):
     )
 
 
+# Generate a side-by-side qualitative comparison for one held-out test sample.
 def main():
     args = parse_args()
     device = get_device()
 
+    # Load the processed dataset and fixed floor-sample-level split.
     dataset = FloorplanNPZDataset(
         args.data_dir,
         max_count=args.max_count,
@@ -293,18 +316,21 @@ def main():
 
     test_indices = split["test"]
 
+    # Ensure the requested position exists within the held-out test partition.
     if not 0 <= args.test_position < len(test_indices):
         raise IndexError(
             f"test_position must be between 0 and "
             f"{len(test_indices) - 1}."
         )
 
+    # Convert the position within the test split to the corresponding dataset index.
     dataset_index = int(
         test_indices[args.test_position]
     )
 
     inputs, target = dataset[dataset_index]
 
+    # Convert the reference semantic target to a NumPy class-ID mask.
     target_mask = (
         target.detach()
         .cpu()
@@ -312,8 +338,10 @@ def main():
         .astype(np.uint8)
     )
 
+    # Add the batch dimension and move the conditional input to the selected device.
     inputs = inputs.unsqueeze(0).to(device)
 
+    # Recover the filled binary support condition from the first input channel.
     support_mask = (
         inputs[0, 0]
         .detach()
@@ -322,23 +350,27 @@ def main():
         > 0.5
     ).astype(np.uint8)
 
+    # Recover the encoded connected-region condition from the second channel.
     encoded_count = decode_connected_region_count(
         inputs,
         args.max_count,
     )
 
+    # Load the retained supervised U-Net checkpoint.
     unet, unet_checkpoint = load_model(
         args.unet_ckpt,
         device,
         state_key="model_state",
     )
 
+    # Load the retained U-Net generator from the cGAN checkpoint.
     cgan, cgan_checkpoint = load_model(
         args.cgan_ckpt,
         device,
         state_key="generator_state",
     )
 
+    # Generate raw semantic predictions from both retained models.
     unet_prediction = predict_mask(
         unet,
         inputs,
@@ -349,6 +381,7 @@ def main():
         inputs,
     )
 
+    # Load the previously calculated sample-level metrics for the same floor.
     unet_metric = load_sample_metric(
         args.unet_metrics,
         args.test_position,
@@ -361,6 +394,7 @@ def main():
         dataset_index,
     )
 
+    # Create a four-panel comparison using the same selected test sample.
     figure, axes = plt.subplots(
         1,
         4,
@@ -402,6 +436,7 @@ def main():
         metric_subtitle(cgan_metric),
     )
 
+    # Include the conditioning count in the figure title for sample context.
     figure.suptitle(
         (
             "Selected held-out test sample "
@@ -418,17 +453,20 @@ def main():
 
     output_path = Path(args.output)
 
+    # Create the output directory before saving the figure.
     output_path.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
+    # Save a high-resolution raster version for direct figure use.
     figure.savefig(
         output_path,
         dpi=300,
         bbox_inches="tight",
     )
 
+    # Save the same comparison as a vector-friendly PDF.
     pdf_path = output_path.with_suffix(
         ".pdf"
     )
@@ -441,6 +479,7 @@ def main():
 
     plt.close(figure)
 
+    # Report the exact checkpoints, sample and metric values used in the figure.
     print("Device:", device)
     print(
         "U-Net checkpoint epoch:",
